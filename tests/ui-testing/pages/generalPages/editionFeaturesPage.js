@@ -86,7 +86,7 @@ export class EditionFeaturesPage {
     const label = await this.editionButton.innerText({ timeout: 15000 });
     const trimmed = label.trim();
     if (trimmed.includes('Edition: Enterprise')) return 'enterprise';
-    if (trimmed.includes('Get OpenObserve Enterprise')) return 'opensource';
+    if (trimmed.includes('Upgrade to Enterprise')) return 'opensource';
     if (trimmed.includes('OpenObserve Features')) return 'cloud';
     throw new Error(`Unrecognized edition button label: "${trimmed}" (raw: ${JSON.stringify(label)})`);
   }
