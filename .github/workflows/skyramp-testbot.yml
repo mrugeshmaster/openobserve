@@ -22,6 +22,40 @@ jobs:
       pull-requests: write
       checks: write
 
+    # SUT (OpenObserve) runtime/feature-flag env — copied from .github/workflows/playwright.yml
+    # so the binary Testbot builds and tests behaves identically to the real E2E suite (several
+    # ZO_* flags gate UI surface area, e.g. ZO_TIMECHART_ENABLED hides/shows a tab).
+    env:
+      COLUMNS: 150
+      ZO_ROOT_USER_EMAIL: root@example.com
+      ZO_ROOT_USER_PASSWORD: Complexpass#123
+      ZO_BASE_URL: http://localhost:5080
+      WS_ZO_BASE_URL: ws://localhost:5080
+      ZO_BASE_URL_SC: http://localhost:5080
+      ZO_BASE_URL_SC_UI: http://localhost:5080
+      INGESTION_URL: http://localhost:5080
+      ORGNAME: default
+      ZO_WEB_URL: "http://localhost:5080"
+      ZO_QUICK_MODE_NUM_FIELDS: 100
+      ZO_QUICK_MODE_STRATEGY: first
+      ZO_ALLOW_USER_DEFINED_SCHEMAS: true
+      ZO_INGEST_ALLOWED_UPTO: 5
+      ZO_FEATURE_QUERY_EXCLUDE_ALL: false
+      ZO_USAGE_BATCH_SIZE: 200
+      ZO_USAGE_PUBLISH_INTERVAL: 2
+      ZO_USAGE_REPORTING_ENABLED: true
+      ZO_MIN_AUTO_REFRESH_INTERVAL: 5
+      ZO_STREAMING_ENABLED: true
+      ZO_COLS_PER_RECORD_LIMIT: "80000"
+      ZO_SMTP_ENABLED: true
+      ZO_FORMAT_STREAM_NAME_TO_LOWERCASE: false
+      ZO_CREATE_ORG_THROUGH_INGESTION: true
+      ZO_UTF8_VIEW_ENABLED: false
+      ZO_ENABLE_CROSS_LINKING: true
+      ZO_TIMECHART_ENABLED: true
+      ZO_SSRF_ALLOW_LOOPBACK: true
+      ZO_MODEL_PRICING_ENABLED: true
+
     steps:
       - name: Generate GitHub App Token
         id: skyramp-testbot-app-token
@@ -43,6 +77,105 @@ jobs:
           githubToken: ${{ steps.skyramp-testbot-app-token.outputs.token }}
           githubAppId: ${{ secrets.SKYRAMP_TESTBOT_APP_ID }}
           githubAppPrivateKey: ${{ secrets.SKYRAMP_TESTBOT_APP_PRIVATE_KEY }}
-          uiCredentials: ${{ secrets.SKYRAMP_UI_CREDENTIALS }}
-          sutSetupMode: 'adapt_workflow'
+          uiCredentials: ${{ secrets.SKYRAMP_UI_CREDENTIALS || 'root@example.com:Complexpass#123' }}
+          sutSetupMode: 'none'
           sutSourceWorkflowFile: '.github/workflows/playwright.yml'
+          # Pattern A (lifecycle commands only): the entire build+start sequence is plain shell.
+          # No GHA-only tooling is required — the Rust nightly toolchain auto-installs via the
+          # repo's committed rust-toolchain.toml, and Node 22 is already preinstalled on the
+          # runner, so neither dtolnay/rust-toolchain nor actions/setup-node is needed here.
+          targetSetupCommand: |
+            set -eo pipefail
+
+            # The job-level `env:` block above is not reliably inherited by the shell that
+            # runs this command (observed: openobserve panicked on boot with "Please set root
+            # user email-id & password" because ZO_ROOT_USER_EMAIL/ZO_ROOT_USER_PASSWORD were
+            # unset here despite being declared at job level). Export explicitly so the server
+            # process (started via nohup below, which inherits THIS shell's env) always has
+            # what it needs regardless of how the outer env: block is plumbed through.
+            export COLUMNS="${COLUMNS:-150}"
+            export ZO_ROOT_USER_EMAIL="${ZO_ROOT_USER_EMAIL:-root@example.com}"
+            export ZO_ROOT_USER_PASSWORD="${ZO_ROOT_USER_PASSWORD:-Complexpass#123}"
+            export ZO_BASE_URL="${ZO_BASE_URL:-http://localhost:5080}"
+            export WS_ZO_BASE_URL="${WS_ZO_BASE_URL:-ws://localhost:5080}"
+            export ZO_BASE_URL_SC="${ZO_BASE_URL_SC:-http://localhost:5080}"
+            export ZO_BASE_URL_SC_UI="${ZO_BASE_URL_SC_UI:-http://localhost:5080}"
+            export INGESTION_URL="${INGESTION_URL:-http://localhost:5080}"
+            export ORGNAME="${ORGNAME:-default}"
+            export ZO_WEB_URL="${ZO_WEB_URL:-http://localhost:5080}"
+            export ZO_QUICK_MODE_NUM_FIELDS="${ZO_QUICK_MODE_NUM_FIELDS:-100}"
+            export ZO_QUICK_MODE_STRATEGY="${ZO_QUICK_MODE_STRATEGY:-first}"
+            export ZO_ALLOW_USER_DEFINED_SCHEMAS="${ZO_ALLOW_USER_DEFINED_SCHEMAS:-true}"
+            export ZO_INGEST_ALLOWED_UPTO="${ZO_INGEST_ALLOWED_UPTO:-5}"
+            export ZO_FEATURE_QUERY_EXCLUDE_ALL="${ZO_FEATURE_QUERY_EXCLUDE_ALL:-false}"
+            export ZO_USAGE_BATCH_SIZE="${ZO_USAGE_BATCH_SIZE:-200}"
+            export ZO_USAGE_PUBLISH_INTERVAL="${ZO_USAGE_PUBLISH_INTERVAL:-2}"
+            export ZO_USAGE_REPORTING_ENABLED="${ZO_USAGE_REPORTING_ENABLED:-true}"
+            export ZO_MIN_AUTO_REFRESH_INTERVAL="${ZO_MIN_AUTO_REFRESH_INTERVAL:-5}"
+            export ZO_STREAMING_ENABLED="${ZO_STREAMING_ENABLED:-true}"
+            export ZO_COLS_PER_RECORD_LIMIT="${ZO_COLS_PER_RECORD_LIMIT:-80000}"
+            export ZO_SMTP_ENABLED="${ZO_SMTP_ENABLED:-true}"
+            export ZO_FORMAT_STREAM_NAME_TO_LOWERCASE="${ZO_FORMAT_STREAM_NAME_TO_LOWERCASE:-false}"
+            export ZO_CREATE_ORG_THROUGH_INGESTION="${ZO_CREATE_ORG_THROUGH_INGESTION:-true}"
+            export ZO_UTF8_VIEW_ENABLED="${ZO_UTF8_VIEW_ENABLED:-false}"
+            export ZO_ENABLE_CROSS_LINKING="${ZO_ENABLE_CROSS_LINKING:-true}"
+            export ZO_TIMECHART_ENABLED="${ZO_TIMECHART_ENABLED:-true}"
+            export ZO_SSRF_ALLOW_LOOPBACK="${ZO_SSRF_ALLOW_LOOPBACK:-true}"
+            export ZO_MODEL_PRICING_ENABLED="${ZO_MODEL_PRICING_ENABLED:-true}"
+
+            echo "::group::Free disk space"
+            sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "${AGENT_TOOLSDIRECTORY:-}" 2>/dev/null || true
+            echo "::endgroup::"
+
+            echo "::group::Install protoc"
+            bash ./.github/protoc.sh
+            echo "::endgroup::"
+
+            echo "::group::Build frontend"
+            (cd web && NODE_OPTIONS="--max-old-space-size=8192" npm ci && NODE_OPTIONS="--max-old-space-size=8192" npm run build)
+            sudo rm -rf /tmp/dist
+            sudo mkdir -p /tmp/dist
+            sudo cp -r web/dist/. /tmp/dist/
+            # Same trick build_binary uses: point the embedded-assets macro at the copied
+            # frontend so it doesn't need to live under the src/api crate at compile time.
+            sed -i 's|folder = "web/dist/"|folder = "/tmp/dist/"|' src/api/src/handler/http/router/ui.rs
+            echo "::endgroup::"
+
+            echo "::group::Build OpenObserve binary (release-ci profile)"
+            GIT_HASH_OVERRIDE="$(git rev-parse HEAD)" cargo build --profile release-ci --target x86_64-unknown-linux-gnu
+            echo "::endgroup::"
+
+            echo "::group::Start OpenObserve"
+            nohup ./target/x86_64-unknown-linux-gnu/release-ci/openobserve > /tmp/o2.log 2>&1 &
+            disown
+            echo "::endgroup::"
+          # Single service (one binary serves both the REST API and the embedded web UI on
+          # :5080), so one unauthenticated endpoint covers both surfaces.
+          targetReadyCheckCommand: 'curl -sf http://localhost:5080/web/login > /dev/null'
+          # Cold, uncached cargo build (no Swatinem/rust-cache — pure build-speed optimization,
+          # not required for correctness) can take well beyond the 30 min default.
+          targetReadyCheckTimeout: '3600'
+          targetReadyCheckDiagnosticsCommand: |
+            echo '--- last 200 lines of /tmp/o2.log ---'
+            tail -n 200 /tmp/o2.log 2>/dev/null || echo 'log not found'
+          targetTeardownCommand: |
+            pkill -f 'target/x86_64-unknown-linux-gnu/release-ci/openobserve' 2>/dev/null || true
+            sleep 2
+            rm -rf /tmp/dist /tmp/o2.log 2>/dev/null || true
+          # No dedicated token endpoint — OpenObserve authenticates via HTTP Basic Auth using
+          # the root user seeded on first boot (matches tests/api-testing/tests/conftest.py and
+          # tests/ui-testing/playwright-tests/utils/global-setup.js). Chain the repo's existing
+          # data-seed script in here (it runs after the readiness gate, so the server is already
+          # up) to populate logs/traces/metrics/alerts/a pipeline for list/search/filter
+          # endpoints, routing its output to stderr so it can't corrupt the captured token.
+          authTokenCommand: |
+            # Same env-propagation caveat as targetSetupCommand: seed-common.sh hard-requires
+            # ZO_BASE_URL (and reads ORGNAME) via `:?` checks, and this phase's shell doesn't
+            # reliably inherit the job-level env: block either. Export all four so the seed
+            # script doesn't die with "ZO_BASE_URL not set" before it ever hits the network.
+            export ZO_ROOT_USER_EMAIL="${ZO_ROOT_USER_EMAIL:-root@example.com}"
+            export ZO_ROOT_USER_PASSWORD="${ZO_ROOT_USER_PASSWORD:-Complexpass#123}"
+            export ZO_BASE_URL="${ZO_BASE_URL:-http://localhost:5080}"
+            export ORGNAME="${ORGNAME:-default}"
+            bash tests/test-data/test-assist-ci/seed/seed-common.sh 1>&2 || echo "seed-common.sh failed" 1>&2
+            printf 'Basic %s' "$(printf '%s' "${ZO_ROOT_USER_EMAIL}:${ZO_ROOT_USER_PASSWORD}" | base64 -w0)"
