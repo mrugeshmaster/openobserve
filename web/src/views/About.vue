@@ -66,6 +66,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                 <span class="text-xs font-semibold uppercase tracking-wide text-(--o2-warning)">{{ t("about.build_lbl") }}</span>
                 {{ formatDate(store.state.zoConfig.build_date) }}
               </span>
+              <!-- copy all build diagnostics -->
+              <button
+                data-test="about-copy-version-info-btn"
+                @click="copyVersionInfo"
+                class="inline-flex items-center gap-1.5 text-sm font-semibold whitespace-nowrap py-2 px-3.5 rounded border border-(--o2-border-color) bg-(--o2-card-bg) cursor-pointer text-(--o2-text-muted) hover:text-(--o2-primary-color) hover:border-[color-mix(in_srgb,var(--o2-primary-color)_35%,transparent)] transition-colors duration-150"
+                :title="t('about.copy_version_info')"
+              >
+                <OIcon name="content-copy" size="sm" class="shrink-0" />
+                {{ t("about.copy_version_info") }}
+              </button>
             </div>
           </div>
         </div>
@@ -400,6 +410,19 @@ export default defineComponent({
       });
     };
 
+    // Copies the full build diagnostics as a single block, handy to paste into
+    // a support ticket or bug report instead of transcribing each field.
+    const copyVersionInfo = () => {
+      const cfg = store.state.zoConfig;
+      const info = [
+        `Version: ${cfg.version}`,
+        `Build type: ${cfg.build_type}`,
+        `Commit: ${cfg.commit_hash}`,
+        `Build date: ${formatDate(cfg.build_date)}`,
+      ].join("\n");
+      copyToClipboard(info);
+    };
+
     const navigateToLicense = () => {
       const metaOrgIdentifier = store.state.zoConfig.meta_org;
       const metaOrg = store.state.organizations?.find(
@@ -440,6 +463,7 @@ export default defineComponent({
       formatLicenseDate,
       navigateToLicense,
       copyToClipboard,
+      copyVersionInfo,
     };
   },
 });
