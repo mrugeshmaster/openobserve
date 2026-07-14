@@ -352,4 +352,35 @@ describe("About", () => {
     // Root element is a div (replaces old .aboutPage class check)
     expect(wrapper.element.tagName).toBe("DIV");
   });
+
+  it("should render the Copy version info button", () => {
+    const wrapper = mount(About, {
+      global: {
+        plugins: [i18n, store, router],
+      },
+    });
+
+    const button = wrapper.find('[data-test="about-copy-version-info-btn"]');
+    expect(button.exists()).toBe(true);
+    expect(button.text()).toContain("Copy version info");
+  });
+
+  it("should copy the full build diagnostics to the clipboard when Copy version info is clicked", async () => {
+    const wrapper = mount(About, {
+      global: {
+        plugins: [i18n, store, router],
+      },
+    });
+
+    await wrapper.vm.copyVersionInfo();
+
+    const expectedInfo = [
+      "Version: v2.0.0",
+      "Build type: opensource",
+      "Commit: abc123def",
+      `Build date: ${wrapper.vm.formatDate("2024-01-15")}`,
+    ].join("\n");
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(expectedInfo);
+  });
 });
