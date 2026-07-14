@@ -1,0 +1,91 @@
+name: Testbot Cache Warm
+
+# Dispatch-only. Run this ONCE on `main` to seed the Rust build cache that the
+# Skyramp Testbot workflow (.github/workflows/skyramp-testbot.yml) restores.
+#
+# Why this exists:
+#   A from-scratch OpenObserve build peaks above ~16 GB RAM and OOM-kills a stock
+#   `ubuntu-latest` runner (exit 143). The Testbot workflow avoids that by restoring
+#   a warm cache and only recompiling changed crates — peak memory then stays under
+#   the stock-runner ceiling. GitHub scopes Actions caches per-branch and only lets
+#   branches read caches created on the DEFAULT branch, so the seed MUST live on main
+#   for testbot PR branches to reach it.
+#
+# When to re-run:
+#   After a `rust-toolchain.toml` bump or a large dependency change — `rustc` and
+#   Cargo.lock are part of the cache fingerprint, so those invalidate the warm cache
+#   and force testbot PRs back onto a cold (OOM-prone) build.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: testbot-cache-warm
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    name: warm
+    # Only meaningful on the default branch — that's the only place a cache is
+    # readable by every base branch a testbot PR might target.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "${AGENT_TOOLSDIRECTORY:-}" 2>/dev/null || true
+
+      # This is the one unavoidable COLD build (it's what seeds the cache), and a
+      # cold build peaks >16 GB. Stock runners have ~16 GB RAM, so add swap to let
+      # the one-time seed complete without OOM. Testbot PR builds are incremental and
+      # do NOT need this — they stay under the ceiling on their own.
+      - name: Add swap for the one-time cold seed build
+        run: |
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      # Toolchain MUST match rust-toolchain.toml (nightly-2026-05-20). rustc is in the
+      # cache fingerprint, so a mismatch here would seed a cache no testbot PR can hit.
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-20
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          # Shared key the testbot workflow restores from. Keep both in sync.
+          shared-key: testbot-replay-release-ci
+          # Seed run: always write the cache — that is the entire point of this job.
+          save-if: 'true'
+
+      - name: Install protoc
+        run: bash ./.github/protoc.sh
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Build frontend + binary (seeds the cache)
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+          GIT_HASH_OVERRIDE: ${{ github.sha }}
+        run: |
+          set -eo pipefail
+          (cd web && npm ci && npm run build)
+          sudo rm -rf /tmp/dist
+          sudo mkdir -p /tmp/dist
+          sudo cp -r web/dist/. /tmp/dist/
+          # Point the embedded-assets macro at the copied frontend (compile-time embed)
+          # so it need not live under the src/api crate at build time.
+          sed -i 's|folder = "web/dist/"|folder = "/tmp/dist/"|' src/api/src/handler/http/router/ui.rs
+          cargo build --profile release-ci --target x86_64-unknown-linux-gnu
