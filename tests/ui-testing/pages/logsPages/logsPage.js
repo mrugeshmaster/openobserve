@@ -81,8 +81,8 @@ export class LogsPage {
         this.yearSelector = (year) => `[data-test="year-selector-${year}"]`;
         this.startTimeField = '[data-test="datetime-start-time"]';
         this.endTimeField = '[data-test="datetime-end-time"]';
-        this.startTimeInput = '[data-test="datetime-start-time"] input[type="time"]';
-        this.endTimeInput = '[data-test="datetime-end-time"] input[type="time"]';
+        this.startTimeInput = '[data-test="datetime-start-time"] input[type="text"]';
+        this.endTimeInput = '[data-test="datetime-end-time"] input[type="text"]';
         this.showQueryToggle = '[data-test="logs-search-bar-show-query-toggle-btn"]';
         this.fieldListCollapseButton = '[data-test="logs-search-field-list-collapse-btn"]';
         this.savedViewsButton = '[data-test="logs-search-bar-utilities-menu-btn"]';
@@ -6390,24 +6390,26 @@ export class LogsPage {
     }
 
     async clickTimeCell() {
-        // Post-UX-revamp: time input is a native <input type="time"> inside datetime-start-time
-        const timeInput = this.page.locator('[data-test="datetime-start-time"] input[type="time"]').first();
+        // Post-editable-24-hour-input revamp: time input is an editable <input type="text">
+        // (class "otime-input") inside datetime-start-time, not a native <input type="time">.
+        const timeInput = this.page.locator('[data-test="datetime-start-time"] input[type="text"]').first();
         await timeInput.waitFor({ state: 'visible', timeout: 5000 });
         return await timeInput.click();
     }
 
     async fillTimeCellWithInvalidValue(value) {
-        // Use fill() with the value and rely on the component's validation to surface
-        // the error state, rather than bypassing browser validation via evaluate().
-        const timeInput = this.page.locator('[data-test="datetime-start-time"] input[type="time"]').first();
+        // OTime.vue validates on the "change" event (fired on blur/Enter), not on "input" —
+        // fill() alone does not trigger the revert, so blur the field afterward to fire it.
+        const timeInput = this.page.locator('[data-test="datetime-start-time"] input[type="text"]').first();
         await timeInput.waitFor({ state: 'visible', timeout: 5000 });
         const currentValue = await timeInput.inputValue().catch(() => '');
         await timeInput.fill('');
         await timeInput.fill(value);
-        // Verify the input reflects the attempted value (or its best-effort parse)
+        await timeInput.blur();
+        // Verify the input reflects the attempted value, or reverted to the last valid one
         const newValue = await timeInput.inputValue().catch(() => '');
         if (newValue !== value) {
-            // Browser rejected or parsed the value — that's the expected error path
+            // Component rejected the malformed 24-hour string and reverted — expected error path
             return { rejected: true, originalValue: currentValue, newValue };
         }
         return { rejected: false, originalValue: currentValue, newValue };
@@ -10191,7 +10193,8 @@ export class LogsPage {
             '[data-test="end-time-input"]',
             '[data-test="start-time-field"] input',
             '[data-test="end-time-field"] input',
-            'input[type="time"]',
+            '[data-test="datetime-start-time"] input[type="text"]',
+            '[data-test="datetime-end-time"] input[type="text"]',
             '[aria-label*="time" i] input',
             '[aria-label*="Time" i]',
         ];

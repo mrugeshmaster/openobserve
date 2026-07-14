@@ -119,14 +119,37 @@ describe("OTime", () => {
       attachTo: document.body,
       props: { modelValue: "09:30" },
     });
-    // The time value is bound to the native <input type="time"> via :value prop
+    // The time value is bound to the editable 24-hour <input type="text"> via :value prop
     // .text() does not return input values; check the input element's value attribute
-    const input = wrapper.find('input[type="time"]');
+    const input = wrapper.find('input[type="text"].otime-input');
     expect(input.exists()).toBe(true);
     expect(input.element.value).toBe("09:30");
   });
 
-  it("should render the clock face popup after opening", async () => {
+  it("should commit a valid 24-hour value on change", async () => {
+    wrapper = mount(OTime, {
+      attachTo: document.body,
+      props: { modelValue: "09:30", withSeconds: false },
+    });
+    const input = wrapper.find('input[type="text"].otime-input');
+    await input.setValue("14:45");
+    await input.trigger("change");
+    expect(wrapper.emitted("update:modelValue")![0][0]).toBe("14:45");
+  });
+
+  it("should revert an invalid 24-hour value on change without emitting", async () => {
+    wrapper = mount(OTime, {
+      attachTo: document.body,
+      props: { modelValue: "09:30", withSeconds: false },
+    });
+    const input = wrapper.find('input[type="text"].otime-input');
+    await input.setValue("99:99");
+    await input.trigger("change");
+    expect(wrapper.emitted("update:modelValue")).toBeFalsy();
+    expect((input.element as HTMLInputElement).value).toBe("09:30");
+  });
+
+  it("should render the time popup after opening", async () => {
     wrapper = mount(OTime, { attachTo: document.body });
     // Click the PopoverTrigger button (the clock icon button), not the role="group" div
     await wrapper.find('[aria-label="Open time picker"]').trigger("click");
@@ -134,21 +157,16 @@ describe("OTime", () => {
     expect(document.body.querySelector('[data-test="otime-popup"]')).toBeTruthy();
   });
 
-  it("should render the clock face SVG inside the popup", async () => {
+  it("should render hour/minute scroll columns inside the popup", async () => {
     wrapper = mount(OTime, { attachTo: document.body });
     await wrapper.find('[aria-label="Open time picker"]').trigger("click");
     await flushPromises();
-    expect(
-      document.body.querySelector('[data-test="otime-clock-face"]'),
-    ).toBeTruthy();
-  });
-
-  it("should render a Close button in the popup", async () => {
-    wrapper = mount(OTime, { attachTo: document.body });
-    await wrapper.find('[aria-label="Open time picker"]').trigger("click");
-    await flushPromises();
-    expect(
-      document.body.querySelector('[data-test="otime-close"]'),
-    ).toBeTruthy();
+    const popup = document.body.querySelector('[data-test="otime-popup"]');
+    expect(popup).toBeTruthy();
+    const listboxes = popup!.querySelectorAll('[role="listbox"]');
+    // Hour and minute columns always render; the seconds column is conditional on withSeconds.
+    expect(listboxes.length).toBeGreaterThanOrEqual(2);
+    expect(popup!.querySelector('[role="listbox"][aria-label="Hour"]')).toBeTruthy();
+    expect(popup!.querySelector('[role="listbox"][aria-label="Minute"]')).toBeTruthy();
   });
 });
