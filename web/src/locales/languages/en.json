@@ -1077,6 +1077,7 @@
     "value_cost_cloud": "14 day free trial. Paid thereafter",
     "commit_lbl": "Commit",
     "build_lbl": "Built",
+    "copy_version_info": "Copy version info",
     "no_license_installed_lbl": "No License Installed",
     "no_license_installed_msg": "No enterprise license is currently installed. Contact your administrator or request a new license.",
     "active_lbl": "Active",
