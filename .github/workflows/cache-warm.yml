@@ -43,10 +43,14 @@ jobs:
       # do NOT need this — they stay under the ceiling on their own.
       - name: Add swap for the one-time cold seed build
         run: |
-          sudo fallocate -l 10G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # Stock runners already have an active /swapfile (fallocate on it fails with
+          # "Text file busy"), so add a SEPARATE 16 GB swapfile on the large /mnt disk
+          # via dd (reliable for swap files; fallocate can produce ones mkswap rejects).
+          sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=16384 status=none
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
