@@ -10,50 +10,54 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.actor != 'skyramp-testbot[bot]' }}
 
-# SUT config: OpenObserve is a single Rust binary that embeds the built web/
-# frontend (rust-embed reads web/dist/ from disk at runtime in debug builds,
-# so frontend and backend are one process on :5080). These values match the
-# root user seeded via env vars, same as .github/workflows/playwright.yml and
-# .github/workflows/api-testing.yml.
-env:
-  ZO_ROOT_USER_EMAIL: root@example.com
-  ZO_ROOT_USER_PASSWORD: Complexpass#123
-  ZO_BASE_URL: http://localhost:5080
-  WS_ZO_BASE_URL: ws://localhost:5080
-  INGESTION_URL: http://localhost:5080
-  ORGNAME: default
-  ZO_WEB_URL: "http://localhost:5080"
-  ZO_QUICK_MODE_NUM_FIELDS: 100
-  ZO_QUICK_MODE_STRATEGY: first
-  ZO_ALLOW_USER_DEFINED_SCHEMAS: true
-  ZO_INGEST_ALLOWED_UPTO: 5
-  ZO_FEATURE_QUERY_EXCLUDE_ALL: false
-  ZO_USAGE_BATCH_SIZE: 200
-  ZO_USAGE_PUBLISH_INTERVAL: 2
-  ZO_USAGE_REPORTING_ENABLED: true
-  ZO_MIN_AUTO_REFRESH_INTERVAL: 5
-  ZO_STREAMING_ENABLED: true
-  ZO_COLS_PER_RECORD_LIMIT: "80000"
-  ZO_SMTP_ENABLED: true
-  ZO_FORMAT_STREAM_NAME_TO_LOWERCASE: false
-  ZO_CREATE_ORG_THROUGH_INGESTION: true
-  ZO_UTF8_VIEW_ENABLED: false
-  ZO_ENABLE_CROSS_LINKING: true
-  ZO_TIMECHART_ENABLED: true
-  ZO_SSRF_ALLOW_LOOPBACK: true
-  ZO_MODEL_PRICING_ENABLED: true
-
 jobs:
   testbot:
-    # Only run for pull_request events or issue_comment on PRs mentioning @skyramp-testbot
+    # Run for pull_request events (but NOT for the Testbot bot's own side-PRs — those
+    # would re-trigger a full build on themselves) or issue_comment on PRs mentioning
+    # @skyramp-testbot.
     if: >-
-      github.event_name == 'pull_request' ||
+      (github.event_name == 'pull_request' && github.actor != 'skyramp-testbot[bot]') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '@skyramp-testbot') && github.event.comment.user.login != 'skyramp-testbot[bot]')
     runs-on: 'ubuntu-latest'
+    timeout-minutes: 120
     permissions:
       contents: write
       pull-requests: write
       checks: write
+
+    # SUT (OpenObserve) runtime/feature-flag env — copied from .github/workflows/playwright.yml
+    # so the binary Testbot builds and tests behaves identically to the real E2E suite (several
+    # ZO_* flags gate UI surface area, e.g. ZO_TIMECHART_ENABLED hides/shows a tab).
+    env:
+      COLUMNS: 150
+      ZO_ROOT_USER_EMAIL: root@example.com
+      ZO_ROOT_USER_PASSWORD: Complexpass#123
+      ZO_BASE_URL: http://localhost:5080
+      WS_ZO_BASE_URL: ws://localhost:5080
+      ZO_BASE_URL_SC: http://localhost:5080
+      ZO_BASE_URL_SC_UI: http://localhost:5080
+      INGESTION_URL: http://localhost:5080
+      ORGNAME: default
+      ZO_WEB_URL: "http://localhost:5080"
+      ZO_QUICK_MODE_NUM_FIELDS: 100
+      ZO_QUICK_MODE_STRATEGY: first
+      ZO_ALLOW_USER_DEFINED_SCHEMAS: true
+      ZO_INGEST_ALLOWED_UPTO: 5
+      ZO_FEATURE_QUERY_EXCLUDE_ALL: false
+      ZO_USAGE_BATCH_SIZE: 200
+      ZO_USAGE_PUBLISH_INTERVAL: 2
+      ZO_USAGE_REPORTING_ENABLED: true
+      ZO_MIN_AUTO_REFRESH_INTERVAL: 5
+      ZO_STREAMING_ENABLED: true
+      ZO_COLS_PER_RECORD_LIMIT: "80000"
+      ZO_SMTP_ENABLED: true
+      ZO_FORMAT_STREAM_NAME_TO_LOWERCASE: false
+      ZO_CREATE_ORG_THROUGH_INGESTION: true
+      ZO_UTF8_VIEW_ENABLED: false
+      ZO_ENABLE_CROSS_LINKING: true
+      ZO_TIMECHART_ENABLED: true
+      ZO_SSRF_ALLOW_LOOPBACK: true
+      ZO_MODEL_PRICING_ENABLED: true
 
     steps:
       - name: Generate GitHub App Token
@@ -69,10 +73,26 @@ jobs:
           token: ${{ steps.skyramp-testbot-app-token.outputs.token }}
           persist-credentials: false
 
-      # --- SUT tooling pre-steps (Pattern B): these are marketplace actions that
-      # cannot be expressed as a single shell command. Actual build + server start
-      # is done via targetSetupCommand below.
-      - name: Setup Rust Toolchain
+      # ----------------------------------------------------------------------------
+      # Build OpenObserve from the PR's source BEFORE handing off to the Testbot.
+      #
+      # This build is deliberately OUTSIDE the Testbot's SUT lifecycle (targetSetupCommand
+      # is launch-only below). Two reasons:
+      #   1. Correctness — the prior design built inside targetSetupCommand, i.e. inside
+      #      the readiness gate and under the agent's timeout, so a slow build starved the
+      #      whole run. Here the build finishes before the agent's clock starts.
+      #   2. Memory — a COLD build peaks >16 GB and OOM-kills a stock runner. Restoring the
+      #      warm cache (seeded on main by cache-warm.yml) means only changed crates
+      #      recompile, keeping peak RAM under the stock-runner ceiling. Run cache-warm.yml
+      #      on main first, or this step falls back to a cold (OOM-prone) build.
+      # ----------------------------------------------------------------------------
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "${AGENT_TOOLSDIRECTORY:-}" 2>/dev/null || true
+
+      # MUST match rust-toolchain.toml (nightly-2026-05-20) — rustc is in the cache
+      # fingerprint, so a mismatch here misses the warm cache and forces a cold build.
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-05-20
@@ -81,11 +101,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
-          shared-key: skyramp-testbot
+          # Same key cache-warm.yml writes. Restore only — warming happens on main.
+          shared-key: testbot-replay-release-ci
+          save-if: 'false'
+
+      - name: Install protoc
+        run: bash ./.github/protoc.sh
 
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+
+      - name: Build OpenObserve (frontend + release-ci binary)
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+          GIT_HASH_OVERRIDE: ${{ github.sha }}
+        run: |
+          set -eo pipefail
+          (cd web && npm ci && npm run build)
+          sudo rm -rf /tmp/dist
+          sudo mkdir -p /tmp/dist
+          sudo cp -r web/dist/. /tmp/dist/
+          # Point the embedded-assets macro at the copied frontend (compile-time embed)
+          # so it need not live under the src/api crate at build time.
+          sed -i 's|folder = "web/dist/"|folder = "/tmp/dist/"|' src/api/src/handler/http/router/ui.rs
+          cargo build --profile release-ci --target x86_64-unknown-linux-gnu
 
       - uses: skyramp/testbot@70034f7ff936e4e516064307679160cdc8da60eb # v0.11.0
         with:
@@ -94,31 +134,79 @@ jobs:
           githubToken: ${{ steps.skyramp-testbot-app-token.outputs.token }}
           githubAppId: ${{ secrets.SKYRAMP_TESTBOT_APP_ID }}
           githubAppPrivateKey: ${{ secrets.SKYRAMP_TESTBOT_APP_PRIVATE_KEY }}
-          uiCredentials: 'root@example.com:Complexpass#123'
-          authTokenCommand: echo -n "Basic $(printf '%s' "${ZO_ROOT_USER_EMAIL}:${ZO_ROOT_USER_PASSWORD}" | base64 -w0)"
-          targetSetupCommand: |
-            sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" || true
-            bash ./.github/protoc.sh
-            (cd web && npm ci && NODE_OPTIONS="--max-old-space-size=8192" npm run build)
-            cargo build --features mimalloc
-            # In debug builds, rust-embed-for-web serves web/dist/ dynamically from disk at
-            # runtime rather than compiling it in, and it resolves that folder attribute
-            # relative to the openobserve-api crate's own CARGO_MANIFEST_DIR (src/api/), not
-            # the repo root. Without this symlink the server 404s on every UI route (e.g.
-            # /web/login), which fails targetReadyCheckCommand even though the API is up.
-            mkdir -p src/api/web
-            ln -sfn ../../../web/dist src/api/web/dist
-            # This command runs outside the full GitHub Actions job context (e.g. during
-            # local SUT bootstrap), so it cannot rely on the workflow's top-level `env:`
-            # block reaching the spawned process — root credentials must be set here too,
-            # or openobserve panics on startup with no root user configured.
-            export ZO_ROOT_USER_EMAIL="root@example.com"
-            export ZO_ROOT_USER_PASSWORD="Complexpass#123"
-            nohup ./target/debug/openobserve > o2.log 2>&1 &
-            disown
-          targetReadyCheckCommand: curl -sf http://localhost:5080/healthz && curl -sf http://localhost:5080/web/login
-          targetReadyCheckDiagnosticsCommand: tail -n 200 o2.log
-          targetReadyCheckTimeout: '3600'
-          targetTeardownCommand: pkill -f 'target/debug/openobserve' || true
+          uiCredentials: ${{ secrets.SKYRAMP_UI_CREDENTIALS || 'root@example.com:Complexpass#123' }}
           sutSetupMode: 'none'
           sutSourceWorkflowFile: '.github/workflows/playwright.yml'
+          # Launch-only: the binary is already built above. This just starts it on the
+          # runner host at :5080 (host networking, so the Skyramp executor can reach it —
+          # a Dockerized SUT would sit on a different Docker network and be unreachable).
+          targetSetupCommand: |
+            set -eo pipefail
+
+            # The job-level `env:` block is not reliably inherited by the shell that runs
+            # this command (observed: openobserve panicked on boot with "Please set root
+            # user email-id & password" because ZO_ROOT_USER_EMAIL/PASSWORD were unset
+            # here). Export explicitly so the nohup'd server always has what it needs.
+            export COLUMNS="${COLUMNS:-150}"
+            export ZO_ROOT_USER_EMAIL="${ZO_ROOT_USER_EMAIL:-root@example.com}"
+            export ZO_ROOT_USER_PASSWORD="${ZO_ROOT_USER_PASSWORD:-Complexpass#123}"
+            export ZO_BASE_URL="${ZO_BASE_URL:-http://localhost:5080}"
+            export WS_ZO_BASE_URL="${WS_ZO_BASE_URL:-ws://localhost:5080}"
+            export ZO_BASE_URL_SC="${ZO_BASE_URL_SC:-http://localhost:5080}"
+            export ZO_BASE_URL_SC_UI="${ZO_BASE_URL_SC_UI:-http://localhost:5080}"
+            export INGESTION_URL="${INGESTION_URL:-http://localhost:5080}"
+            export ORGNAME="${ORGNAME:-default}"
+            export ZO_WEB_URL="${ZO_WEB_URL:-http://localhost:5080}"
+            export ZO_QUICK_MODE_NUM_FIELDS="${ZO_QUICK_MODE_NUM_FIELDS:-100}"
+            export ZO_QUICK_MODE_STRATEGY="${ZO_QUICK_MODE_STRATEGY:-first}"
+            export ZO_ALLOW_USER_DEFINED_SCHEMAS="${ZO_ALLOW_USER_DEFINED_SCHEMAS:-true}"
+            export ZO_INGEST_ALLOWED_UPTO="${ZO_INGEST_ALLOWED_UPTO:-5}"
+            export ZO_FEATURE_QUERY_EXCLUDE_ALL="${ZO_FEATURE_QUERY_EXCLUDE_ALL:-false}"
+            export ZO_USAGE_BATCH_SIZE="${ZO_USAGE_BATCH_SIZE:-200}"
+            export ZO_USAGE_PUBLISH_INTERVAL="${ZO_USAGE_PUBLISH_INTERVAL:-2}"
+            export ZO_USAGE_REPORTING_ENABLED="${ZO_USAGE_REPORTING_ENABLED:-true}"
+            export ZO_MIN_AUTO_REFRESH_INTERVAL="${ZO_MIN_AUTO_REFRESH_INTERVAL:-5}"
+            export ZO_STREAMING_ENABLED="${ZO_STREAMING_ENABLED:-true}"
+            export ZO_COLS_PER_RECORD_LIMIT="${ZO_COLS_PER_RECORD_LIMIT:-80000}"
+            export ZO_SMTP_ENABLED="${ZO_SMTP_ENABLED:-true}"
+            export ZO_FORMAT_STREAM_NAME_TO_LOWERCASE="${ZO_FORMAT_STREAM_NAME_TO_LOWERCASE:-false}"
+            export ZO_CREATE_ORG_THROUGH_INGESTION="${ZO_CREATE_ORG_THROUGH_INGESTION:-true}"
+            export ZO_UTF8_VIEW_ENABLED="${ZO_UTF8_VIEW_ENABLED:-false}"
+            export ZO_ENABLE_CROSS_LINKING="${ZO_ENABLE_CROSS_LINKING:-true}"
+            export ZO_TIMECHART_ENABLED="${ZO_TIMECHART_ENABLED:-true}"
+            export ZO_SSRF_ALLOW_LOOPBACK="${ZO_SSRF_ALLOW_LOOPBACK:-true}"
+            export ZO_MODEL_PRICING_ENABLED="${ZO_MODEL_PRICING_ENABLED:-true}"
+
+            echo "::group::Start OpenObserve"
+            nohup ./target/x86_64-unknown-linux-gnu/release-ci/openobserve > /tmp/o2.log 2>&1 &
+            disown
+            echo "::endgroup::"
+          # One binary serves both the REST API and the embedded web UI on :5080. Check
+          # both surfaces: /healthz (API up) AND /web/login (frontend assets embedded and
+          # served). The binary is prebuilt, so this passes within seconds of first boot.
+          targetReadyCheckCommand: 'curl -sf http://localhost:5080/healthz > /dev/null && curl -sf http://localhost:5080/web/login > /dev/null'
+          targetReadyCheckTimeout: '180'
+          targetReadyCheckDiagnosticsCommand: |
+            echo '--- last 200 lines of /tmp/o2.log ---'
+            tail -n 200 /tmp/o2.log 2>/dev/null || echo 'log not found'
+          targetTeardownCommand: |
+            pkill -f 'target/x86_64-unknown-linux-gnu/release-ci/openobserve' 2>/dev/null || true
+            sleep 2
+            rm -rf /tmp/dist /tmp/o2.log 2>/dev/null || true
+          # No dedicated token endpoint — OpenObserve authenticates via HTTP Basic Auth using
+          # the root user seeded on first boot (matches tests/api-testing/tests/conftest.py and
+          # tests/ui-testing/playwright-tests/utils/global-setup.js). Chain the repo's existing
+          # data-seed script in here (it runs after the readiness gate, so the server is already
+          # up) to populate logs/traces/metrics/alerts/a pipeline for list/search/filter
+          # endpoints, routing its output to stderr so it can't corrupt the captured token.
+          authTokenCommand: |
+            # Same env-propagation caveat as targetSetupCommand: seed-common.sh hard-requires
+            # ZO_BASE_URL (and reads ORGNAME) via `:?` checks, and this phase's shell doesn't
+            # reliably inherit the job-level env: block either. Export all four so the seed
+            # script doesn't die with "ZO_BASE_URL not set" before it ever hits the network.
+            export ZO_ROOT_USER_EMAIL="${ZO_ROOT_USER_EMAIL:-root@example.com}"
+            export ZO_ROOT_USER_PASSWORD="${ZO_ROOT_USER_PASSWORD:-Complexpass#123}"
+            export ZO_BASE_URL="${ZO_BASE_URL:-http://localhost:5080}"
+            export ORGNAME="${ORGNAME:-default}"
+            bash tests/test-data/test-assist-ci/seed/seed-common.sh 1>&2 || echo "seed-common.sh failed" 1>&2
+            printf 'Basic %s' "$(printf '%s' "${ZO_ROOT_USER_EMAIL}:${ZO_ROOT_USER_PASSWORD}" | base64 -w0)"

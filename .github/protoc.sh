@@ -12,7 +12,10 @@ else
   exit 1
 fi
 
-unzip protoc.zip -d protoc
+# -o (overwrite) so a rerun over an already-populated protoc/ dir doesn't hit the
+# interactive "replace? [y]es,[n]o" prompt, read EOF on non-interactive stdin, and
+# abort the whole setup under `set -e`.
+unzip -o protoc.zip -d protoc
 
 sudo cp protoc/bin/protoc /usr/local/bin/
 sudo cp -r protoc/include/google /usr/local/include/
