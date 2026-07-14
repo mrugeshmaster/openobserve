@@ -1,0 +1,37 @@
+# Skyramp Workspace Configuration for OpenObserve eval (local baseline).
+# SUT is pre-built and already running on :5080, so serverStartCommand is a no-op.
+# Backend tests are black-box Python (Rust has no testbot test-gen). Basic auth.
+workspace:
+  repoName: mrugeshmaster/openobserve
+  repoUrl: https://github.com/mrugeshmaster/openobserve
+metadata:
+  schemaVersion: v1
+  mcpVersion: 0.0.64
+  executorVersion: v1.3.27
+  createdAt: "2026-01-01T00:00:00Z"
+  updatedAt: "2026-01-01T00:00:00Z"
+services:
+  - serviceName: openobserve-backend
+    language: python
+    framework: pytest
+    testDirectory: tests
+    api:
+      schemaPath: http://localhost:5080/api-doc/openapi.json
+      authType: basic
+      authHeader: Authorization
+      authScheme: Basic
+      baseUrl: http://localhost:5080
+    runtimeDetails:
+      runtime: docker
+      dockerNetwork: eval-24-openobserve_default
+  - serviceName: openobserve-web
+    language: typescript
+    framework: playwright
+    testDirectory: tests/ui-testing
+    api:
+      baseUrl: http://localhost:5080/web
+      authType: none
+      authHeader: ""
+    runtimeDetails:
+      runtime: docker
+      dockerNetwork: eval-24-openobserve_default
