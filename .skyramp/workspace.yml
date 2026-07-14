@@ -1,0 +1,33 @@
+# Skyramp Workspace Configuration
+workspace:
+  repoName: mrugeshmaster/openobserve
+  repoUrl: https://github.com/mrugeshmaster/openobserve
+metadata:
+  schemaVersion: v1
+  executorVersion: v1.3.34
+  createdAt: "2026-07-14T19:09:34.482Z"
+  updatedAt: "2026-07-14T19:09:34.489Z"
+services:
+  - serviceName: openobserve-api-backend
+    language: python
+    framework: pytest
+    testDirectory: tests/api-testing/tests
+    api:
+      schemaPath: http://localhost:5080/api-doc/openapi.json
+      authType: basic
+      authHeader: Authorization
+      baseUrl: http://localhost:5080/api
+    runtimeDetails:
+      serverStartCommand: ZO_ROOT_USER_EMAIL="root@example.com" ZO_ROOT_USER_PASSWORD="Complexpass#123" cargo run
+      runtime: local
+  - serviceName: openobserve-web-frontend
+    language: javascript
+    framework: playwright
+    testDirectory: tests/ui-testing/playwright-tests
+    api:
+      authType: none
+      authHeader: ""
+      baseUrl: http://localhost:5080
+    runtimeDetails:
+      serverStartCommand: ZO_ROOT_USER_EMAIL="root@example.com" ZO_ROOT_USER_PASSWORD="Complexpass#123" cargo run
+      runtime: local

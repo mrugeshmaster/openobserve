@@ -10,6 +10,39 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.actor != 'skyramp-testbot[bot]' }}
 
+# SUT config: OpenObserve is a single Rust binary that embeds the built web/
+# frontend (rust-embed reads web/dist/ from disk at runtime in debug builds,
+# so frontend and backend are one process on :5080). These values match the
+# root user seeded via env vars, same as .github/workflows/playwright.yml and
+# .github/workflows/api-testing.yml.
+env:
+  ZO_ROOT_USER_EMAIL: root@example.com
+  ZO_ROOT_USER_PASSWORD: Complexpass#123
+  ZO_BASE_URL: http://localhost:5080
+  WS_ZO_BASE_URL: ws://localhost:5080
+  INGESTION_URL: http://localhost:5080
+  ORGNAME: default
+  ZO_WEB_URL: "http://localhost:5080"
+  ZO_QUICK_MODE_NUM_FIELDS: 100
+  ZO_QUICK_MODE_STRATEGY: first
+  ZO_ALLOW_USER_DEFINED_SCHEMAS: true
+  ZO_INGEST_ALLOWED_UPTO: 5
+  ZO_FEATURE_QUERY_EXCLUDE_ALL: false
+  ZO_USAGE_BATCH_SIZE: 200
+  ZO_USAGE_PUBLISH_INTERVAL: 2
+  ZO_USAGE_REPORTING_ENABLED: true
+  ZO_MIN_AUTO_REFRESH_INTERVAL: 5
+  ZO_STREAMING_ENABLED: true
+  ZO_COLS_PER_RECORD_LIMIT: "80000"
+  ZO_SMTP_ENABLED: true
+  ZO_FORMAT_STREAM_NAME_TO_LOWERCASE: false
+  ZO_CREATE_ORG_THROUGH_INGESTION: true
+  ZO_UTF8_VIEW_ENABLED: false
+  ZO_ENABLE_CROSS_LINKING: true
+  ZO_TIMECHART_ENABLED: true
+  ZO_SSRF_ALLOW_LOOPBACK: true
+  ZO_MODEL_PRICING_ENABLED: true
+
 jobs:
   testbot:
     # Only run for pull_request events or issue_comment on PRs mentioning @skyramp-testbot
@@ -36,6 +69,24 @@ jobs:
           token: ${{ steps.skyramp-testbot-app-token.outputs.token }}
           persist-credentials: false
 
+      # --- SUT tooling pre-steps (Pattern B): these are marketplace actions that
+      # cannot be expressed as a single shell command. Actual build + server start
+      # is done via targetSetupCommand below.
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-05-20
+          targets: x86_64-unknown-linux-gnu
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          shared-key: skyramp-testbot
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
       - uses: skyramp/testbot@70034f7ff936e4e516064307679160cdc8da60eb # v0.11.0
         with:
           skyrampLicenseFile: ${{ secrets.SKYRAMP_LICENSE_FILE }}
@@ -43,6 +94,31 @@ jobs:
           githubToken: ${{ steps.skyramp-testbot-app-token.outputs.token }}
           githubAppId: ${{ secrets.SKYRAMP_TESTBOT_APP_ID }}
           githubAppPrivateKey: ${{ secrets.SKYRAMP_TESTBOT_APP_PRIVATE_KEY }}
-          uiCredentials: ${{ secrets.SKYRAMP_UI_CREDENTIALS }}
-          sutSetupMode: 'adapt_workflow'
+          uiCredentials: 'root@example.com:Complexpass#123'
+          authTokenCommand: echo -n "Basic $(printf '%s' "${ZO_ROOT_USER_EMAIL}:${ZO_ROOT_USER_PASSWORD}" | base64 -w0)"
+          targetSetupCommand: |
+            sudo rm -rf /usr/share/dotnet /opt/ghc "/usr/local/share/boost" "$AGENT_TOOLSDIRECTORY" || true
+            bash ./.github/protoc.sh
+            (cd web && npm ci && NODE_OPTIONS="--max-old-space-size=8192" npm run build)
+            cargo build --features mimalloc
+            # In debug builds, rust-embed-for-web serves web/dist/ dynamically from disk at
+            # runtime rather than compiling it in, and it resolves that folder attribute
+            # relative to the openobserve-api crate's own CARGO_MANIFEST_DIR (src/api/), not
+            # the repo root. Without this symlink the server 404s on every UI route (e.g.
+            # /web/login), which fails targetReadyCheckCommand even though the API is up.
+            mkdir -p src/api/web
+            ln -sfn ../../../web/dist src/api/web/dist
+            # This command runs outside the full GitHub Actions job context (e.g. during
+            # local SUT bootstrap), so it cannot rely on the workflow's top-level `env:`
+            # block reaching the spawned process — root credentials must be set here too,
+            # or openobserve panics on startup with no root user configured.
+            export ZO_ROOT_USER_EMAIL="root@example.com"
+            export ZO_ROOT_USER_PASSWORD="Complexpass#123"
+            nohup ./target/debug/openobserve > o2.log 2>&1 &
+            disown
+          targetReadyCheckCommand: curl -sf http://localhost:5080/healthz && curl -sf http://localhost:5080/web/login
+          targetReadyCheckDiagnosticsCommand: tail -n 200 o2.log
+          targetReadyCheckTimeout: '3600'
+          targetTeardownCommand: pkill -f 'target/debug/openobserve' || true
+          sutSetupMode: 'none'
           sutSourceWorkflowFile: '.github/workflows/playwright.yml'
