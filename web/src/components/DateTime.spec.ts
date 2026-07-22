@@ -557,5 +557,19 @@ describe("DateTime Component", () => {
       expect(wrapper.vm.relativeValue).toBe(2);
       expect(wrapper.emitted("on:date-change")).toBeTruthy();
     });
+
+    it("should include the 4-hour quick-select option index-aligned in relativeDates and relativeDatesInHour", () => {
+      wrapper = createWrapper();
+
+      expect(wrapper.vm.relativeDates.h).toEqual([1, 2, 3, 4, 6, 8, 12]);
+      expect(wrapper.vm.relativeDates.h[3]).toBe(4);
+      expect(wrapper.vm.relativeDatesInHour.h[3]).toBe(4);
+
+      wrapper.vm.setRelativeDate("h", 4);
+
+      expect(wrapper.vm.selectedType).toBe("relative");
+      expect(wrapper.vm.relativePeriod).toBe("h");
+      expect(wrapper.vm.relativeValue).toBe(4);
+    });
   });
 });
