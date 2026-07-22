@@ -221,6 +221,13 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                   </tr>
                 </tbody>
               </table>
+              <div
+                v-if="absoluteRangeError"
+                data-test="date-time-range-error"
+                class="px-3 pb-2 text-[0.7rem] text-red-500"
+              >
+                {{ absoluteRangeError }}
+              </div>
             </div>
           </OTabPanel>
         </OTabPanels>
@@ -244,10 +251,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
             variant="primary"
             size="xs"
             class="element-box-shadow"
-            @click="
-              saveDate(null);
-              menuOpen = false;
-            "
+            @click="onApplyClick"
           >
             {{ t("common.apply") }}
           </OButton>
@@ -384,6 +388,9 @@ export default defineComponent({
       from: "",
       to: "",
     });
+    // Validation message shown when the chosen absolute range is not
+    // strictly increasing (end must be after start). Empty string = valid.
+    const absoluteRangeError = ref("");
     const relativePeriod = ref("m");
     const relativeValue = ref(15);
     const currentTimezone =
@@ -740,6 +747,23 @@ export default defineComponent({
       }
     };
 
+    // Apply handler for the manual (non-autoApply) picker. For an absolute
+    // range, reject a non-increasing range (end <= start): show an inline
+    // error and keep the picker open instead of applying an empty/backwards
+    // window. Relative ranges and valid absolute ranges apply as before.
+    const onApplyClick = () => {
+      if (selectedType.value === "absolute") {
+        const { startUTC, endUTC } = getUTCTimeStamp();
+        if (Number.isFinite(startUTC) && Number.isFinite(endUTC) && endUTC <= startUTC) {
+          absoluteRangeError.value = "End time must be after start time";
+          return;
+        }
+      }
+      absoluteRangeError.value = "";
+      saveDate(null);
+      menuOpen.value = false;
+    };
+
     function formatDate(d) {
       var year = d.getFullYear();
       var month = ("0" + (d.getMonth() + 1)).slice(-2); // Months are zero-based
@@ -1013,6 +1037,7 @@ export default defineComponent({
 
     const setDateType = (type) => {
       selectedType.value = type;
+      absoluteRangeError.value = "";
       // displayValue.value = getDisplayValue();
       if (props.autoApply)
         saveDate(type === "absolute" ? "absolute" : "relative-custom");
@@ -1228,6 +1253,8 @@ export default defineComponent({
     return {
       t,
       menuOpen,
+      absoluteRangeError,
+      onApplyClick,
       onMenuOpenChange,
       datetimeBtn,
       getImageURL,
