@@ -119,9 +119,9 @@ describe("OTime", () => {
       attachTo: document.body,
       props: { modelValue: "09:30" },
     });
-    // The time value is bound to the native <input type="time"> via :value prop
+    // The time value is bound to a text input (24-hour, editable) via :value prop
     // .text() does not return input values; check the input element's value attribute
-    const input = wrapper.find('input[type="time"]');
+    const input = wrapper.find('input[type="text"]');
     expect(input.exists()).toBe(true);
     expect(input.element.value).toBe("09:30");
   });
@@ -134,21 +134,31 @@ describe("OTime", () => {
     expect(document.body.querySelector('[data-test="otime-popup"]')).toBeTruthy();
   });
 
-  it("should render the clock face SVG inside the popup", async () => {
+  it("should render the hour and minute scroll columns inside the popup", async () => {
     wrapper = mount(OTime, { attachTo: document.body });
     await wrapper.find('[aria-label="Open time picker"]').trigger("click");
     await flushPromises();
     expect(
-      document.body.querySelector('[data-test="otime-clock-face"]'),
+      document.body.querySelector('[data-test="otime-popup"] [role="listbox"][aria-label="Hour"]'),
+    ).toBeTruthy();
+    expect(
+      document.body.querySelector('[data-test="otime-popup"] [role="listbox"][aria-label="Minute"]'),
     ).toBeTruthy();
   });
 
-  it("should render a Close button in the popup", async () => {
-    wrapper = mount(OTime, { attachTo: document.body });
+  it("should update modelValue when clicking an hour option in the popup", async () => {
+    wrapper = mount(OTime, {
+      attachTo: document.body,
+      props: { modelValue: "09:30" },
+    });
     await wrapper.find('[aria-label="Open time picker"]').trigger("click");
     await flushPromises();
-    expect(
-      document.body.querySelector('[data-test="otime-close"]'),
-    ).toBeTruthy();
+    const hourOption = document.body.querySelector(
+      '[aria-label="Hour"] [role="option"][aria-selected="false"]',
+    );
+    expect(hourOption).toBeTruthy();
+    await (hourOption as HTMLElement).click();
+    await flushPromises();
+    expect(wrapper.emitted("update:modelValue")).toBeTruthy();
   });
 });
