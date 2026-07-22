@@ -548,14 +548,76 @@ describe("DateTime Component", () => {
     it("should test setRelativeDate with autoApply", async () => {
       wrapper = createWrapper({ autoApply: true });
       store.state.savedViewFlag = false;
-      
+
       wrapper.vm.setRelativeDate("h", 2);
       await wrapper.vm.$nextTick();
-      
+
       expect(wrapper.vm.selectedType).toBe("relative");
       expect(wrapper.vm.relativePeriod).toBe("h");
       expect(wrapper.vm.relativeValue).toBe(2);
       expect(wrapper.emitted("on:date-change")).toBeTruthy();
+    });
+
+    it("should reject a backwards absolute range on Apply and keep the picker open", async () => {
+      wrapper = createWrapper({ autoApply: false });
+      store.state.savedViewFlag = false;
+
+      wrapper.vm.selectedType = "absolute";
+      wrapper.vm.selectedDate = { from: "2023/01/01", to: "2023/01/01" };
+      wrapper.vm.selectedTime = { startTime: "12:00:00", endTime: "10:00:00" };
+      wrapper.vm.menuOpen = true;
+
+      wrapper.vm.onApplyClick();
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.vm.absoluteRangeError).toBe(
+        "End time must be after start time",
+      );
+      expect(wrapper.vm.menuOpen).toBe(true);
+      expect(wrapper.emitted("on:date-change")).toBeFalsy();
+    });
+
+    it("should apply a valid forward absolute range and clear any previous error", async () => {
+      wrapper = createWrapper({ autoApply: false });
+      store.state.savedViewFlag = false;
+
+      // First trigger the error state.
+      wrapper.vm.selectedType = "absolute";
+      wrapper.vm.selectedDate = { from: "2023/01/01", to: "2023/01/01" };
+      wrapper.vm.selectedTime = { startTime: "12:00:00", endTime: "10:00:00" };
+      wrapper.vm.menuOpen = true;
+      wrapper.vm.onApplyClick();
+      await wrapper.vm.$nextTick();
+      expect(wrapper.vm.absoluteRangeError).toBe(
+        "End time must be after start time",
+      );
+
+      // Now fix the range (start < end) and re-apply.
+      wrapper.vm.selectedTime = { startTime: "10:00:00", endTime: "12:00:00" };
+      wrapper.vm.onApplyClick();
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.vm.absoluteRangeError).toBe("");
+      expect(wrapper.vm.menuOpen).toBe(false);
+      expect(wrapper.emitted("on:date-change")).toBeTruthy();
+    });
+
+    it("should clear absoluteRangeError when switching tabs via setDateType", async () => {
+      wrapper = createWrapper({ autoApply: false });
+
+      wrapper.vm.selectedType = "absolute";
+      wrapper.vm.selectedDate = { from: "2023/01/01", to: "2023/01/01" };
+      wrapper.vm.selectedTime = { startTime: "12:00:00", endTime: "10:00:00" };
+      wrapper.vm.onApplyClick();
+      await wrapper.vm.$nextTick();
+      expect(wrapper.vm.absoluteRangeError).toBe(
+        "End time must be after start time",
+      );
+
+      wrapper.vm.setDateType("relative");
+      await wrapper.vm.$nextTick();
+
+      expect(wrapper.vm.absoluteRangeError).toBe("");
     });
   });
 });
