@@ -1,7 +1,7 @@
 /**
  * Edition Features Documentation Validation
  *
- * Validates the header edition button ("Get OpenObserve Enterprise (Free)" on OSS,
+ * Validates the header edition button ("Upgrade to Enterprise — Free" on OSS,
  * "Edition: Enterprise" on ENT), the EnterpriseUpgradeDialog it opens, and every
  * feature card's o2.ws documentation short link — each card is clicked and the
  * resulting popup must land on the expected openobserve.ai page.
@@ -93,7 +93,7 @@ test.describe('Edition Features Documentation Validation', () => {
     test.setTimeout(360000); // 22 external link navigations
 
     await validateEditionDialog(page, pm, {
-      buttonLabel: 'Get OpenObserve Enterprise (Free)',
+      buttonLabel: 'Upgrade to Enterprise — Free',
       hero: {
         heroTitle: 'Get Enterprise Edition',
         badgePattern: /Free up to \d+GB \/ day/,
