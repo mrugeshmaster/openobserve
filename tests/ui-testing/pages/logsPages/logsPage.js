@@ -81,8 +81,8 @@ export class LogsPage {
         this.yearSelector = (year) => `[data-test="year-selector-${year}"]`;
         this.startTimeField = '[data-test="datetime-start-time"]';
         this.endTimeField = '[data-test="datetime-end-time"]';
-        this.startTimeInput = '[data-test="datetime-start-time"] input[type="time"]';
-        this.endTimeInput = '[data-test="datetime-end-time"] input[type="time"]';
+        this.startTimeInput = '[data-test="datetime-start-time"] input[type="text"]';
+        this.endTimeInput = '[data-test="datetime-end-time"] input[type="text"]';
         this.showQueryToggle = '[data-test="logs-search-bar-show-query-toggle-btn"]';
         this.fieldListCollapseButton = '[data-test="logs-search-field-list-collapse-btn"]';
         this.savedViewsButton = '[data-test="logs-search-bar-utilities-menu-btn"]';
@@ -6390,8 +6390,8 @@ export class LogsPage {
     }
 
     async clickTimeCell() {
-        // Post-UX-revamp: time input is a native <input type="time"> inside datetime-start-time
-        const timeInput = this.page.locator('[data-test="datetime-start-time"] input[type="time"]').first();
+        // Post-UX-revamp: time input is a 24-hour <input type="text"> inside datetime-start-time
+        const timeInput = this.page.locator('[data-test="datetime-start-time"] input[type="text"]').first();
         await timeInput.waitFor({ state: 'visible', timeout: 5000 });
         return await timeInput.click();
     }
@@ -6399,7 +6399,7 @@ export class LogsPage {
     async fillTimeCellWithInvalidValue(value) {
         // Use fill() with the value and rely on the component's validation to surface
         // the error state, rather than bypassing browser validation via evaluate().
-        const timeInput = this.page.locator('[data-test="datetime-start-time"] input[type="time"]').first();
+        const timeInput = this.page.locator('[data-test="datetime-start-time"] input[type="text"]').first();
         await timeInput.waitFor({ state: 'visible', timeout: 5000 });
         const currentValue = await timeInput.inputValue().catch(() => '');
         await timeInput.fill('');
@@ -10191,6 +10191,7 @@ export class LogsPage {
             '[data-test="end-time-input"]',
             '[data-test="start-time-field"] input',
             '[data-test="end-time-field"] input',
+            'input.otime-input[type="text"]',
             'input[type="time"]',
             '[aria-label*="time" i] input',
             '[aria-label*="Time" i]',
