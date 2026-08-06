@@ -127,6 +127,15 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
                   icon-left="edit"
                 />
                 <OButton
+                  variant="ghost"
+                  size="icon-sm"
+                  :title="t('function.duplicate')"
+                  data-test="function-list-duplicate-function-btn"
+                  data-row-action="duplicate"
+                  @click="duplicateFn({ row })"
+                  icon-left="content-copy"
+                />
+                <OButton
                   variant="ghost-destructive"
                   size="icon-sm"
                   :title="t('function.delete')"
@@ -456,6 +465,33 @@ export default defineComponent({
       });
     };
 
+    // Opens the add form pre-filled from an existing function, so a variant can be
+    // written without retyping the body. Kept out of showAddUpdateFn because that
+    // one keys off row presence to decide add-vs-update, and this is neither.
+    const duplicateFn = (props: any) => {
+      formData.value = {
+        ...props.row,
+        name: `${props.row.name}_copy`,
+      };
+      isUpdated.value = false;
+      router.push({
+        name: "functionList",
+        query: {
+          action: "duplicate",
+          name: props.row.name,
+          org_identifier: store.state.selectedOrganization.identifier,
+        },
+      });
+      addTransform();
+
+      segment.track("Button Click", {
+        button: "Duplicate Function",
+        user_org: store.state.selectedOrganization.identifier,
+        user_id: store.state.userInfo.email,
+        page: "Functions",
+      });
+    };
+
     const refreshList = () => {
       router.push({
         name: "functionList",
@@ -734,6 +770,7 @@ export default defineComponent({
       deleteFn,
       isUpdated,
       showAddUpdateFn,
+      duplicateFn,
       showDeleteDialogFn,
       showAddJSTransformDialog,
       forceDeleteFn,

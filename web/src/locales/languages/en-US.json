@@ -2732,6 +2732,7 @@
     "actions": "Actions",
     "cancel": "Cancel",
     "updateTitle": "Update function",
+    "duplicate": "Duplicate function",
     "delete": "Delete Function",
     "vrl": "VRL",
     "javascript": "JavaScript",
