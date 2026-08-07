@@ -949,4 +949,44 @@ describe("FunctionList", () => {
       expect(vm.isUpdated).toBe(true);
     });
   });
+
+  describe("Duplicate Function (duplicateFn)", () => {
+    it("should render the duplicate function button", async () => {
+      const wrapper = mount(FunctionList, {
+        global: { plugins: [i18n, store, router], stubs: globalStubs },
+      });
+
+      await flushPromises();
+
+      const duplicateButtons = wrapper.findAll('[data-test="function-list-duplicate-function-btn"]');
+      expect(duplicateButtons.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("should set formData.name with _copy suffix when duplicating", async () => {
+      const wrapper = mount(FunctionList, {
+        global: { plugins: [i18n, store, router], stubs: globalStubs },
+      });
+
+      await flushPromises();
+
+      const vm = wrapper.vm as any;
+      vm.duplicateFn({ row: { name: "func1", function: "identity()", transType: "0" } });
+
+      expect(vm.formData.name).toBe("func1_copy");
+    });
+
+    it("should set isUpdated to false when duplicating", async () => {
+      const wrapper = mount(FunctionList, {
+        global: { plugins: [i18n, store, router], stubs: globalStubs },
+      });
+
+      await flushPromises();
+
+      const vm = wrapper.vm as any;
+      vm.isUpdated = true;
+      vm.duplicateFn({ row: { name: "func1", function: "identity()", transType: "0" } });
+
+      expect(vm.isUpdated).toBe(false);
+    });
+  });
 });
