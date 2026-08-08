@@ -131,6 +131,11 @@ jobs:
           githubToken: ${{ steps.skyramp-testbot-app-token.outputs.token }}
           githubAppId: ${{ secrets.SKYRAMP_TESTBOT_APP_ID }}
           githubAppPrivateKey: ${{ secrets.SKYRAMP_TESTBOT_APP_PRIVATE_KEY }}
+          # Newline-separated allowlist. PRs from anyone else are skipped silently,
+          # so fork contributions — which cannot reach the secrets above anyway —
+          # do not each burn a release-ci build.
+          allowedAuthors: |
+            mrugeshmaster
           sutSetupMode: 'none'
           sutSourceWorkflowFile: '.github/workflows/playwright.yml'
           targetSetupCommand: 'bash .skyramp/sut/setup.sh'
