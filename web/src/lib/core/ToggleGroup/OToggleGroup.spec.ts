@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
-import { h } from "vue";
+import { h, nextTick } from "vue";
 import OToggleGroup from "./OToggleGroup.vue";
 import OToggleGroupItem from "./OToggleGroupItem.vue";
 
@@ -224,6 +224,42 @@ describe("OToggleGroup", () => {
 
       await dragged.trigger("dragend");
       expect(itemAt(wrapper, "a").classes()).not.toContain("opacity-40");
+    });
+  });
+
+  // --- MutationObserver / childList re-measurement ---
+
+  describe("MutationObserver / childList re-measurement", () => {
+    it("does not throw when unmounting after mount (MutationObserver cleanup)", () => {
+      const wrapper = mountGroup({}, [{ value: "x", label: "X" }]);
+      // onBeforeUnmount must disconnect the MutationObserver and cancel any
+      // pending requestAnimationFrame without throwing.
+      expect(() => wrapper.unmount()).not.toThrow();
+    });
+
+    it("still renders correctly after a child DOM mutation fires the observer", async () => {
+      vi.useFakeTimers();
+      try {
+        const wrapper = mountGroup(
+          { reorderable: true },
+          [
+            { value: "a", label: "A" },
+            { value: "b", label: "B" },
+          ],
+        );
+
+        // Force a re-render which may mutate childList, triggering the observer.
+        await wrapper.setProps({});
+        // Let MutationObserver callbacks drain (microtask queue), then advance
+        // the requestAnimationFrame timer used by measureSettled.
+        await nextTick();
+        vi.runAllTimers();
+
+        expect(wrapper.exists()).toBe(true);
+        expect(wrapper.findAll("button").length).toBeGreaterThanOrEqual(2);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
