@@ -20,12 +20,12 @@ class FunctionsPage {
     this.rowEditButton = this.page.locator(this.rowEditButtonSelector);
     this.rowDeleteButton = this.page.locator(this.rowDeleteButtonSelector);
 
-    // Function type selection (Reka-UI radios — wrapper divs carry the data-test).
-    // The inner RadioGroupItem renders data-state="checked|unchecked" — we read it
-    // via page.evaluate scoped from the wrapper's data-test locator (no element-tag
-    // or class selectors per AGENT_RULES §2).
-    this.vrlRadio = this.page.locator('[data-test="function-transform-type-vrl-radio"]');
-    this.jsRadio = this.page.locator('[data-test="function-transform-type-js-radio"]');
+    // Function type selection (OToggleGroupItem — each option carries the data-test).
+    // The active item renders data-state="on" (Reka-UI OToggleGroupItem convention)
+    // — read it via toHaveAttribute or getAttribute scoped to the option's locator
+    // (no element-tag or class selectors per AGENT_RULES §2).
+    this.vrlRadio = this.page.locator('[data-test="function-transform-type-vrl-option"]');
+    this.jsRadio = this.page.locator('[data-test="function-transform-type-js-option"]');
 
     // Function form elements. The name is an inline-edited title (OFormInlineEdit):
     // a display trigger swaps to an input on click.
@@ -324,15 +324,15 @@ class FunctionsPage {
   }
 
   async expectJsRadioSelected() {
-    // ORadio forwards the consumer's data-test onto the inner RadioGroupItem,
-    // which Reka-UI exposes via `data-state="checked|unchecked"`.
+    // OToggleGroupItem (Reka-UI) exposes data-state="on" when active, "off" otherwise.
     await this.jsRadio.waitFor({ state: 'visible' });
-    await expect(this.jsRadio).toHaveAttribute('data-state', 'checked');
+    await expect(this.jsRadio).toHaveAttribute('data-state', 'on');
   }
 
   async expectVrlRadioSelected() {
+    // OToggleGroupItem (Reka-UI) exposes data-state="on" when active, "off" otherwise.
     await this.vrlRadio.waitFor({ state: 'visible' });
-    await expect(this.vrlRadio).toHaveAttribute('data-state', 'checked');
+    await expect(this.vrlRadio).toHaveAttribute('data-state', 'on');
   }
 
   async expectTestOutputContains(text) {
@@ -479,16 +479,15 @@ class FunctionsPage {
     await this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
     await this.page.waitForTimeout(2000);
 
-    // Wait for radio buttons to be visible
+    // Wait for toggle options to be visible
     await this.jsRadio.waitFor({ state: 'visible', timeout: 10000 });
 
-    // ORadio forwards the consumer's data-test onto the inner RadioGroupItem,
-    // which Reka-UI exposes via `data-state="checked|unchecked"`.
+    // OToggleGroupItem (Reka-UI) exposes data-state="on" for the active option.
     const jsState = await this.jsRadio.getAttribute('data-state');
     const vrlState = await this.vrlRadio.getAttribute('data-state');
 
-    if (jsState === 'checked') return 'js';
-    if (vrlState === 'checked') return 'vrl';
+    if (jsState === 'on') return 'js';
+    if (vrlState === 'on') return 'vrl';
     return null;
   }
 

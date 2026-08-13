@@ -168,6 +168,63 @@ describe("FunctionsToolbar", () => {
     expect(wrapper.find('[data-test="function-transform-type-js-option"]').exists()).toBe(false);
   });
 
+  it("active option carries data-state=on matching transType", () => {
+    const wrapper = mountToolbar(
+      {
+        transformTypeOptions: [
+          { label: "VRL", value: "0" },
+          { label: "JavaScript", value: "1" },
+        ],
+      },
+      { name: "", transType: "0" },
+    );
+    const vrlOption = wrapper.find('[data-test="function-transform-type-vrl-option"]');
+    const jsOption = wrapper.find('[data-test="function-transform-type-js-option"]');
+    expect(vrlOption.attributes("data-state")).toBe("on");
+    expect(jsOption.attributes("data-state")).not.toBe("on");
+  });
+
+  it("clicking an option writes the language to the form", async () => {
+    const wrapper = mountToolbar(
+      {
+        transformTypeOptions: [
+          { label: "VRL", value: "0" },
+          { label: "JavaScript", value: "1" },
+        ],
+      },
+      { name: "", transType: "0" },
+    );
+    await wrapper.find('[data-test="function-transform-type-js-option"]').trigger("click");
+    await flushPromises();
+    expect(getForm(wrapper).state.values.transType).toBe("1");
+  });
+
+  it("both info tips are reachable regardless of selection", () => {
+    const wrapperVrl = mountToolbar(
+      {
+        transformTypeOptions: [
+          { label: "VRL", value: "0" },
+          { label: "JavaScript", value: "1" },
+        ],
+      },
+      { name: "", transType: "0" },
+    );
+    expect(wrapperVrl.find('[data-test="function-transform-type-vrl-info"]').exists()).toBe(true);
+    expect(wrapperVrl.find('[data-test="function-transform-type-js-info"]').exists()).toBe(true);
+
+    const wrapperJs = mountToolbar(
+      {
+        transformTypeOptions: [
+          { label: "VRL", value: "0" },
+          { label: "JavaScript", value: "1" },
+        ],
+      },
+      { name: "", transType: "1" },
+    );
+    expect(wrapperJs.find('[data-test="function-transform-type-vrl-info"]').exists()).toBe(true);
+    expect(wrapperJs.find('[data-test="function-transform-type-js-info"]').exists()).toBe(true);
+  });
+
   it("should emit test event when test button is clicked", async () => {
     const wrapper = mountToolbar({
       transformTypeOptions: [{ label: "VRL", value: "0" }],
