@@ -63,9 +63,9 @@ class FunctionsFormValidationPage {
 
     // ==================== FunctionsToolbar locators ====================
 
-    // VRL / JS transform type radios
-    this.vrlRadio = page.locator('[data-test="function-transform-type-vrl-radio"]');
-    this.jsRadio = page.locator('[data-test="function-transform-type-js-radio"]');
+    // VRL / JS transform type toggle options
+    this.vrlRadio = page.locator('[data-test="function-transform-type-vrl-option"]');
+    this.jsRadio = page.locator('[data-test="function-transform-type-js-option"]');
 
     // ==================== StreamRouting locators ====================
 
@@ -253,12 +253,11 @@ class FunctionsFormValidationPage {
   // ==================== FunctionsToolbar assertion helpers ====================
 
   async assertVrlRadioSelected() {
-    testLogger.info('Asserting VRL radio is checked');
+    testLogger.info('Asserting VRL toggle option is on');
     await this.vrlRadio.waitFor({ state: 'visible', timeout: 10000 });
-    // ORadio renders a native input — check aria-checked or checked attribute
+    // OToggleGroupItem uses data-state="on" when selected
     const checked = await this.vrlRadio.evaluate(el => {
-      const input = el.querySelector('input[type="radio"]') || el.closest('[role="radio"]') || el;
-      return input.checked || el.getAttribute('aria-checked') === 'true' || el.getAttribute('data-state') === 'checked';
+      return el.getAttribute('data-state') === 'on';
     });
     expect(checked).toBe(true);
   }
