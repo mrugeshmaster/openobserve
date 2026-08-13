@@ -1,30 +1,20 @@
 #!/bin/bash
 # Start OpenObserve. Wired in as targetSetupCommand.
-# Expects the release-ci binary pre-built and staged at ./release-ci-binary/openobserve
-# by .github/workflows/skyramp-testbot.yml; falls back to the Docker image if absent.
+# Requires the release-ci binary pre-built and staged at ./release-ci-binary/openobserve
+# by .github/workflows/skyramp-testbot.yml.
 set -e
 
 # ---- Start OpenObserve ----
-# If the binary wasn't pre-staged by the GHA pre-steps, extract it from the Docker image.
-# openobserve does not publish pre-built binaries to GitHub releases; Docker Hub is the
-# canonical distribution channel.
+# No fallback to the published Docker image, on purpose. That image is the latest
+# RELEASE, so it carries none of the PR's changes -- and since the Vue bundle is
+# compiled into the binary via rust-embed, none of the PR's UI either. The bot
+# would then be scored against an app missing the very feature it was asked to
+# test, with nothing in the run announcing the substitution. A missing binary is
+# a broken build, not a reason to start a different application.
 if [ ! -f "./release-ci-binary/openobserve" ]; then
-  echo "Pre-built binary not found at ./release-ci-binary/openobserve; extracting from Docker image..."
-  mkdir -p release-ci-binary
-
-  DOCKER_TAG=$(curl -sf "https://hub.docker.com/v2/repositories/openobserve/openobserve/tags/?page_size=50&ordering=last_updated" 2>/dev/null | \
-    python3 -c "
-import sys, json, re
-tags = json.load(sys.stdin).get('results', [])
-stable = [t['name'] for t in tags if re.match(r'^v\d+\.\d+\.\d+(-rc\d+)?$', t['name'])]
-print(stable[0] if stable else 'latest')
-" 2>/dev/null || echo "latest")
-
-  echo "Pulling openobserve/openobserve:${DOCKER_TAG} ..."
-  docker pull "openobserve/openobserve:${DOCKER_TAG}"
-  CID=$(docker create "openobserve/openobserve:${DOCKER_TAG}")
-  docker cp "${CID}:/openobserve" release-ci-binary/openobserve
-  docker rm "${CID}"
+  echo "FATAL: no binary at ./release-ci-binary/openobserve." >&2
+  echo "The 'Build binary and frontend' and 'Stage binary for SUT startup' steps must run first." >&2
+  exit 1
 fi
 chmod +x ./release-ci-binary/openobserve
 
