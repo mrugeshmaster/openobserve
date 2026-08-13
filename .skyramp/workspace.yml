@@ -1,12 +1,12 @@
 # Skyramp Workspace Configuration
 workspace:
-  repoName: openobserve/openobserve
-  repoUrl: https://github.com/openobserve/openobserve
+  repoName: mrugeshmaster/openobserve
+  repoUrl: https://github.com/mrugeshmaster/openobserve
 metadata:
   schemaVersion: v1
-  executorVersion: v1.3.37
-  createdAt: "2026-08-07T06:25:59.776Z"
-  updatedAt: "2026-08-07T06:25:59.777Z"
+  executorVersion: v1.3.38
+  createdAt: "2026-08-13T01:37:53.660Z"
+  updatedAt: "2026-08-13T01:37:53.664Z"
 services:
   - serviceName: openobserve
     language: javascript
@@ -20,3 +20,8 @@ services:
     runtimeDetails:
       serverStartCommand: bash .skyramp/sut/setup.sh
       runtime: local
+      testSuites:
+        - testRunCommand: npx playwright test --reporter=list
+          testEnv:
+            SKYRAMP_UI_PASSWORD: Complexpass#123
+            SKYRAMP_TEST_BASE_URL: http://localhost:5080

@@ -949,4 +949,74 @@ describe("FunctionList", () => {
       expect(vm.isUpdated).toBe(true);
     });
   });
+
+  describe("Duplicate Function (duplicateFn)", () => {
+    it("should render the duplicate function button for each row", async () => {
+      const wrapper = mount(FunctionList, {
+        global: { plugins: [i18n, store, router], stubs: globalStubs },
+      });
+
+      await flushPromises();
+      const duplicateBtns = wrapper.findAll('[data-test="function-list-duplicate-function-btn"]');
+      expect(duplicateBtns.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("should set formData.name to source name with _copy suffix", async () => {
+      const wrapper = mount(FunctionList, {
+        global: { plugins: [i18n, store, router], stubs: globalStubs },
+      });
+
+      await flushPromises();
+
+      const vm = wrapper.vm as any;
+      vm.duplicateFn({ row: { name: "func1", function: "identity()", transType: "0" } });
+
+      expect(vm.formData.name).toBe("func1_copy");
+    });
+
+    it("should set isUpdated to false when duplicating a function", async () => {
+      const wrapper = mount(FunctionList, {
+        global: { plugins: [i18n, store, router], stubs: globalStubs },
+      });
+
+      await flushPromises();
+
+      const vm = wrapper.vm as any;
+      vm.isUpdated = true;
+      vm.duplicateFn({ row: { name: "func1", function: "identity()", transType: "0" } });
+
+      expect(vm.isUpdated).toBe(false);
+    });
+
+    it("should copy source row fields (function body, transType) into formData", async () => {
+      const wrapper = mount(FunctionList, {
+        global: { plugins: [i18n, store, router], stubs: globalStubs },
+      });
+
+      await flushPromises();
+
+      const vm = wrapper.vm as any;
+      const sourceRow = { name: "func1", function: "identity()", transType: "0" };
+      vm.duplicateFn({ row: sourceRow });
+
+      expect(vm.formData.function).toBe("identity()");
+      expect(vm.formData.transType).toBe("0");
+    });
+
+    it("should open the add form after duplicating", async () => {
+      const wrapper = mount(FunctionList, {
+        global: { plugins: [i18n, store, router], stubs: globalStubs },
+      });
+
+      await flushPromises();
+
+      const vm = wrapper.vm as any;
+      expect(vm.showAddJSTransformDialog).toBe(false);
+
+      vm.duplicateFn({ row: { name: "func1", function: "identity()", transType: "0" } });
+      await flushPromises();
+
+      expect(vm.showAddJSTransformDialog).toBe(true);
+    });
+  });
 });
