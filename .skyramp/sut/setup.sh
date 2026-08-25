@@ -1,38 +1,17 @@
 #!/bin/bash
 # Start OpenObserve. Wired in as targetSetupCommand.
 # Expects the release-ci binary pre-built and staged at ./release-ci-binary/openobserve
-# by .github/workflows/skyramp-testbot.yml; falls back to the Docker image if absent.
+# by .github/workflows/skyramp-testbot.yml. If it is absent the build failed — fail.
 set -e
 
 # ---- Start OpenObserve ----
 # The binary is pre-built from THIS PR's code by skyramp-testbot.yml and staged at
-# ./release-ci-binary/openobserve. If it is missing the build failed — fail loudly
-# rather than testing a mismatched version.
-#
-# A published Docker image is the WRONG code (a released version, not this PR), so
-# testing against it produces meaningless pass/fail. The fallback stays available for
-# LOCAL runs only, behind an explicit opt-in.
+# ./release-ci-binary/openobserve. If it is missing the build failed — fail, rather
+# than testing a mismatched version (a released Docker image is the WRONG code and
+# would produce a meaningless pass/fail).
 if [ ! -f "./release-ci-binary/openobserve" ]; then
-  if [ "${ALLOW_DOCKER_FALLBACK:-0}" != "1" ]; then
-    echo "::error::Pre-built binary not found at ./release-ci-binary/openobserve — the build step failed. Refusing to test a released Docker image against PR code. Set ALLOW_DOCKER_FALLBACK=1 for local runs." >&2
-    exit 1
-  fi
-  echo "::warning::ALLOW_DOCKER_FALLBACK=1 — extracting a RELEASED image; this does NOT test the PR code." >&2
-  mkdir -p release-ci-binary
-
-  DOCKER_TAG=$(curl -sf "https://hub.docker.com/v2/repositories/openobserve/openobserve/tags/?page_size=50&ordering=last_updated" 2>/dev/null | \
-    python3 -c "
-import sys, json, re
-tags = json.load(sys.stdin).get('results', [])
-stable = [t['name'] for t in tags if re.match(r'^v\d+\.\d+\.\d+(-rc\d+)?$', t['name'])]
-print(stable[0] if stable else 'latest')
-" 2>/dev/null || echo "latest")
-
-  echo "Pulling openobserve/openobserve:${DOCKER_TAG} ..."
-  docker pull "openobserve/openobserve:${DOCKER_TAG}"
-  CID=$(docker create "openobserve/openobserve:${DOCKER_TAG}")
-  docker cp "${CID}:/openobserve" release-ci-binary/openobserve
-  docker rm "${CID}"
+  echo "::error::Pre-built binary not found at ./release-ci-binary/openobserve — the build step failed." >&2
+  exit 1
 fi
 chmod +x ./release-ci-binary/openobserve
 
