@@ -32,7 +32,10 @@ use sea_orm::{
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait, sea_query::Expr,
 };
 
-use super::entity::{slo_status, slos};
+use super::{
+    entity::{slo_status, slos},
+    get_lock,
+};
 use crate::errors::{DbError, Error};
 
 /// What an update did to the writing epoch.
@@ -138,6 +141,9 @@ pub async fn create(
     now: i64,
     editor: Option<&str>,
 ) -> Result<(), Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let txn = db.begin().await?;
     let mut model = to_model(slo, now)?;
     model.created_at = Set(now);
@@ -168,6 +174,9 @@ pub async fn update(
     now: i64,
     editor: Option<&str>,
 ) -> Result<GenerationEffect, Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let txn = db.begin().await?;
 
     let Some(existing) = slos::Entity::find_by_id(slo.id.clone())
@@ -285,6 +294,9 @@ pub async fn bump_generation(
     id: &str,
     now: i64,
 ) -> Result<Option<(i32, i32)>, Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let txn = db.begin().await?;
     let Some(existing) = slos::Entity::find_by_id(id.to_string())
         .filter(slos::Column::Org.eq(org))
@@ -329,6 +341,9 @@ pub async fn bump_generation(
 /// does not instantly free the storage its slices occupy, and pretending
 /// otherwise would let an org delete-and-recreate its way past the cap.
 pub async fn delete(db: &DatabaseConnection, org: &str, id: &str) -> Result<bool, Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let txn = db.begin().await?;
     let Some(model) = slos::Entity::find_by_id(id.to_string())
         .filter(slos::Column::Org.eq(org))
@@ -367,6 +382,9 @@ pub(crate) async fn ids_in_org(db: &DatabaseConnection, org: &str) -> Result<Vec
 /// modules, which resolve their org through `ids_in_org` and therefore run
 /// BEFORE this (`org_cleanup::step_delete_db_resources`).
 pub async fn delete_by_org(db: &DatabaseConnection, org: &str) -> Result<(), Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     slos::Entity::delete_many()
         .filter(slos::Column::Org.eq(org))
         .exec(db)
@@ -389,6 +407,10 @@ pub async fn set_enabled(
     else {
         return Ok(false);
     };
+
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let mut active = model.into_active_model();
     active.enabled = Set(enabled);
     active.updated_at = Set(now);
@@ -422,6 +444,10 @@ pub async fn move_to_folder(
     if ids.is_empty() {
         return Ok(0);
     }
+
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let res = slos::Entity::update_many()
         .col_expr(slos::Column::FolderId, Expr::value(dst_folder_id))
         .col_expr(slos::Column::UpdatedAt, Expr::value(now))
@@ -551,7 +577,10 @@ pub(crate) async fn insert_for_test(db: &DatabaseConnection, org: &str, id: &str
 
 #[cfg(test)]
 mod tests {
-    use config::meta::slo::{CountSource, SliConfig};
+    use config::meta::{
+        alerts::Operator,
+        slo::{CountSource, QueryLanguage, SliConfig},
+    };
     use sea_orm::Database;
 
     use super::*;
@@ -689,6 +718,84 @@ mod tests {
         assert_eq!(
             update(&db, &edited, 2_000, None).await.unwrap(),
             GenerationEffect::Bumped { from: 1, to: 2 }
+        );
+    }
+
+    /// Pins the ONE lever an operator has to force an SLO to rebuild its
+    /// history, because there is no "recalculate" endpoint, button or CLI
+    /// subcommand: for a non-alert SLI, [`update`] is the only route to a
+    /// generation bump, and the documented repair for an SLO whose stored
+    /// slices were computed by a since-fixed bug is to re-save it with a
+    /// whitespace-only edit to its query.
+    ///
+    /// **Internal** whitespace, not leading or trailing, and that is not a
+    /// detail: the Monaco editor behind the SLO query field trims on blur and
+    /// rewrites its own model before the save reads it
+    /// (`web/src/components/CodeQueryEditor.vue`), so an edit that only adds a
+    /// trailing space never reaches this comparison — the operator would get a
+    /// successful save that rebuilt nothing. A doubled space between two
+    /// tokens survives both that trim and `SloExpressionField`'s newline
+    /// collapse.
+    ///
+    /// Driven through `update` rather than by calling [`definition_changed`]
+    /// directly, so that swapping the CALL SITE breaks it too. The comparison
+    /// has an unreferenced twin in
+    /// `config::meta::slo::generation::requires_new_generation`, whose
+    /// `canonicalize` step collapses whitespace inside every string and whose
+    /// own tests assert that whitespace-only edits do NOT force a rebuild.
+    /// Wiring it in here would look like a tidy-up and would silently turn the
+    /// documented repair into a no-op. If that happens, this test fails and
+    /// the release note has to change with it.
+    #[tokio::test]
+    async fn an_internal_whitespace_query_edit_bumps_the_generation() {
+        fn time_slice_sli(query: &str) -> SliConfig {
+            SliConfig::TimeSlice {
+                stream: "requests".into(),
+                stream_type: "logs".into(),
+                query_language: QueryLanguage::Sql,
+                query: query.to_string(),
+                scope: None,
+                comparator: Operator::LessThan,
+                threshold: 300.0,
+                absent_is_bad: false,
+            }
+        }
+
+        let db = db().await;
+        let mut original = slo();
+        original.definition.sli_config = time_slice_sli("approx_percentile_cont(duration, 0.95)");
+        create(&db, &original, 1_000, None).await.unwrap();
+
+        let mut edited = original.clone();
+        edited.definition.sli_config = time_slice_sli("approx_percentile_cont(duration,  0.95)");
+
+        assert_eq!(
+            update(&db, &edited, 2_000, None).await.unwrap(),
+            GenerationEffect::Bumped { from: 1, to: 2 },
+            "a doubled space must mint a new generation, or the documented repair is a no-op"
+        );
+
+        // The bump is the whole point: the rebuild reads from the re-seeded
+        // status row, so a bump that did not reset it would leave the old
+        // definition's arithmetic in the new epoch's window.
+        let status = slo::load_status(&db, ID, slo_status::ROLLUP_GROUP_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.definition_generation, 2);
+        assert_eq!(status.good, None, "re-seeded, not carried over");
+    }
+
+    /// The control that keeps the repair honest, and the reason it cannot be
+    /// stated as "open the SLO and press Save": an unchanged re-save returns
+    /// `Unchanged` and rebuilds nothing at all.
+    #[tokio::test]
+    async fn re_saving_an_identical_definition_rebuilds_nothing() {
+        let db = db().await;
+        create(&db, &slo(), 1_000, None).await.unwrap();
+        assert_eq!(
+            update(&db, &slo(), 2_000, None).await.unwrap(),
+            GenerationEffect::Unchanged(1)
         );
     }
 

@@ -35,11 +35,14 @@ pub mod alert_grouping;
 mod cloud;
 mod compactor;
 pub mod config_watcher;
+mod db_monitoring;
 mod file_list_dump;
 pub(crate) mod files;
 mod flatten_compactor;
 #[cfg(feature = "enterprise")]
 mod incidents;
+#[cfg(feature = "enterprise")]
+mod llm_review_reconciliation;
 pub mod metrics;
 mod mmdb_downloader;
 #[cfg(feature = "enterprise")]
@@ -399,6 +402,13 @@ pub async fn init() -> Result<(), anyhow::Error> {
     _ = infra::db::tantivy_index::get_ttv_timestamp_updated_at().await;
     // check tantivy secondary index update time
     _ = infra::db::tantivy_index::get_ttv_secondary_index_updated_at().await;
+    if let Err(e) = infra::db::trace_time_index::initialize(
+        config::get_config().common.trace_time_index_enabled,
+    )
+    .await
+    {
+        log::warn!("failed to initialize trace time index coverage marker: {e}");
+    }
 
     // Auth auditing should be done by router also
     #[cfg(feature = "enterprise")]
@@ -661,6 +671,10 @@ pub async fn init() -> Result<(), anyhow::Error> {
     tokio::task::spawn(flatten_compactor::run());
     #[cfg(feature = "enterprise")]
     tokio::task::spawn(service_graph::run());
+    // No cfg, unlike service_graph above: parts of DBM's read API are
+    // enterprise-only, but this rollup works on ordinary database spans and is
+    // identical in both builds (design §5/§7).
+    tokio::task::spawn(db_monitoring::run());
     #[cfg(feature = "enterprise")]
     tokio::task::spawn(incidents::run());
     // Register enterprise callbacks before durable consumers and scheduler startup.
@@ -745,10 +759,15 @@ pub async fn init() -> Result<(), anyhow::Error> {
                         ..Default::default()
                     };
                     let stream_type = config::meta::stream::StreamType::from(stream_type.as_str());
-                    let count_response =
-                        search_service::search("", &org_id, stream_type, None, &count_req)
-                            .await
-                            .map_err(|e| anyhow::anyhow!(e))?;
+                    let count_response = search_service::search(
+                        &config::ider::generate_trace_id(),
+                        &org_id,
+                        stream_type,
+                        None,
+                        &count_req,
+                    )
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))?;
                     if count_response.is_partial || !count_response.function_error.is_empty() {
                         return Ok(o2_enterprise::enterprise::llm_evaluations::eval_jobs::scheduler::SchedulerSearchResult {
                             total: count_response.total,
@@ -788,18 +807,24 @@ pub async fn init() -> Result<(), anyhow::Error> {
                         use_cache: false,
                         ..Default::default()
                     };
-                    search_service::search("", &org_id, stream_type, None, &data_req)
-                        .await
-                        .map(|response| {
-                            o2_enterprise::enterprise::llm_evaluations::eval_jobs::scheduler::SchedulerSearchResult {
-                                hits: response.hits,
-                                total,
-                                is_partial: response.is_partial,
-                                function_error: response.function_error,
-                                over_limit,
-                            }
-                        })
-                        .map_err(|e| anyhow::anyhow!(e))
+                    search_service::search(
+                        &config::ider::generate_trace_id(),
+                        &org_id,
+                        stream_type,
+                        None,
+                        &data_req,
+                    )
+                    .await
+                    .map(|response| {
+                        o2_enterprise::enterprise::llm_evaluations::eval_jobs::scheduler::SchedulerSearchResult {
+                            hits: response.hits,
+                            total,
+                            is_partial: response.is_partial,
+                            function_error: response.function_error,
+                            over_limit,
+                        }
+                    })
+                    .map_err(|e| anyhow::anyhow!(e))
                 })
             },
         );
@@ -823,7 +848,7 @@ pub async fn init() -> Result<(), anyhow::Error> {
                         ..Default::default()
                     };
                     search_service::search(
-                        "",
+                        &config::ider::generate_trace_id(),
                         &request.org_id,
                         stream_type,
                         None,
@@ -972,10 +997,30 @@ pub async fn init() -> Result<(), anyhow::Error> {
             log::error!("Failed to start anomaly detection scheduler: {e}");
         }
     }
-    #[cfg(feature = "enterprise")]
     if LOCAL_NODE.is_scheduler() {
-        o2_enterprise::enterprise::synthetics::init().await;
-        if get_o2_config().synthetics.enabled {
+        // Ungated: synthetics is OSS, and without this an OSS build accepts a
+        // check, stores it, and never runs it — the routes would be registered
+        // and the workers would not exist.
+        //
+        // `init` carries its own super-cluster arbitration: in a super cluster
+        // it starts the scheduler/dispatcher/reaper only in the cluster holding
+        // the job-cluster claim, the same key `scheduler::run` below elects on.
+        openobserve_synthetics::init().await;
+        // The staleness watcher stays enterprise — it reports on private
+        // locations, whose agents are the enterprise half.
+        #[cfg(feature = "enterprise")]
+        if config::get_config().synthetics.enabled {
+            // Deliberately NOT behind that gate. It reports on
+            // `synthetics_agents`, which never replicates (spec §3) because an
+            // agent long-polls exactly one region — so a location's agent rows
+            // exist in one region and only that region can tell they went
+            // stale. Gating this would leave agents registered outside the job
+            // cluster with no liveness reporting at all, including the §9
+            // misconfiguration where they are pointed at the wrong region and
+            // that is the only signal available. The duplicate-notification
+            // hazard the gate would remove does not arise: the agent sets are
+            // disjoint per region, so a region without rows short-circuits on
+            // `agents.is_empty()` before it can claim or notify.
             tokio::task::spawn(crate::service::synthetics::location_staleness_watcher());
         }
     }
@@ -1091,6 +1136,10 @@ pub async fn init() -> Result<(), anyhow::Error> {
     // climbs past what its window can hold. Also releases expired budget
     // residuals (S-14c).
     slo_maintenance::run();
+    // `_llm_scores` is authoritative for Workbench reviews. Repair the narrow
+    // failure window where ingestion succeeded but QueueItem status did not.
+    #[cfg(feature = "enterprise")]
+    llm_review_reconciliation::run();
 
     if LOCAL_NODE.is_compactor() {
         tokio::task::spawn(file_list_dump::run());

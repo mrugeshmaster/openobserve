@@ -33,7 +33,10 @@ use sea_orm::{
     TransactionTrait,
 };
 
-use super::entity::{alert_state_transitions, alert_states, alerts};
+use super::{
+    entity::{alert_state_transitions, alert_states, alerts},
+    get_lock,
+};
 use crate::{
     db::{ORM_CLIENT, connect_to_orm},
     errors,
@@ -161,6 +164,10 @@ pub async fn persist_with<C: sea_orm::ConnectionTrait + TransactionTrait>(
     if update.state.is_none() && ledger.is_none() {
         return Ok(());
     }
+
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let txn = conn.begin().await?;
     write_update(&txn, update).await?;
     if let Some(write) = ledger {
@@ -195,6 +202,9 @@ pub async fn persist_group_plan_with<C: sea_orm::ConnectionTrait + TransactionTr
     plan: &GroupPlan,
     alert_id: &str,
 ) -> Result<bool, errors::Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let txn = conn.begin().await?;
 
     // §5.3 opt-out race: this evaluation may have read the alert BEFORE a save
@@ -260,6 +270,9 @@ pub async fn advance_delivery_state_with<C: sea_orm::ConnectionTrait + Transacti
     episode: DeliveryEpisode,
     outcome: DeliveryOutcome,
 ) -> Result<bool, errors::Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let txn = conn.begin().await?;
 
     let Some(current) =
@@ -445,6 +458,10 @@ pub async fn delete_groups_with<C: sea_orm::ConnectionTrait>(
     if group_keys.is_empty() {
         return Ok(());
     }
+
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     alert_states::Entity::delete_many()
         .filter(alert_states::Column::AlertId.eq(alert_id))
         .filter(alert_states::Column::GroupKey.is_in(group_keys.to_vec()))
@@ -512,6 +529,9 @@ pub async fn delete_all_groups_with<C: sea_orm::ConnectionTrait>(
     conn: &C,
     alert_id: &str,
 ) -> Result<u64, errors::Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let res = alert_states::Entity::delete_many()
         .filter(alert_states::Column::AlertId.eq(alert_id))
         .filter(alert_states::Column::GroupKey.ne(ROLLUP_GROUP_KEY))
@@ -591,6 +611,19 @@ where
     }
 
     Ok(())
+}
+
+/// Writes one state/transition update inside a caller-owned metadata
+/// transaction. Composite evaluation uses this after renewing and fencing its
+/// scheduler claim in the same transaction.
+pub async fn persist_update_in_transaction<C>(
+    txn: &C,
+    update: &StateUpdate,
+) -> Result<(), errors::Error>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    write_update(txn, update).await
 }
 
 /// Append one transition row, inside a caller-owned transaction.
@@ -688,6 +721,99 @@ pub async fn list_transitions_filtered(
         .collect())
 }
 
+/// Transitions for one alert inside a time window, oldest first — the shape a
+/// status-lane renderer needs (each row's `to_level` is in effect from `at` to
+/// the next row). Unlike [`list_transitions_filtered`] this is bounded by `at`
+/// and ordered ascending so the caller can paint forward in time.
+pub async fn list_transitions_between(
+    alert_id: &str,
+    group_key: Option<&str>,
+    from: i64,
+    to: i64,
+    limit: u64,
+) -> Result<Vec<StateTransition>, errors::Error> {
+    let client = ORM_CLIENT.get_or_init(connect_to_orm).await;
+    let mut query = alert_state_transitions::Entity::find()
+        .filter(alert_state_transitions::Column::AlertId.eq(alert_id))
+        .filter(alert_state_transitions::Column::At.gte(from))
+        .filter(alert_state_transitions::Column::At.lte(to));
+    if let Some(key) = group_key {
+        query = query.filter(alert_state_transitions::Column::GroupKey.eq(key));
+    }
+    Ok(query
+        .order_by_asc(alert_state_transitions::Column::At)
+        .limit(limit)
+        .all(client)
+        .await?
+        .into_iter()
+        .filter_map(|m| {
+            Some(StateTransition {
+                alert_id: m.alert_id,
+                group_key: m.group_key,
+                from_outcome: m.from_outcome.and_then(RunOutcome::from_i32),
+                to_outcome: RunOutcome::from_i32(m.to_outcome)?,
+                from_level: m.from_level.and_then(AlertLevel::from_i32),
+                to_level: m.to_level.and_then(AlertLevel::from_i32),
+                at: m.at,
+                value: m.value,
+                group_labels: m.group_labels,
+            })
+        })
+        .collect())
+}
+
+/// Batched counterpart to [`list_transitions_between`]: transitions for many
+/// alerts inside one window, grouped by alert id, oldest first per alert. Each
+/// lane is truncated to `per_alert_limit` in memory — the window itself bounds
+/// the fetch, so no per-alert SQL limit (and no N per-child queries) is needed.
+pub async fn list_transitions_between_many(
+    alert_ids: &[String],
+    group_key: Option<&str>,
+    from: i64,
+    to: i64,
+    per_alert_limit: u64,
+) -> Result<std::collections::HashMap<String, Vec<StateTransition>>, errors::Error> {
+    let mut grouped: std::collections::HashMap<String, Vec<StateTransition>> =
+        std::collections::HashMap::new();
+    if alert_ids.is_empty() {
+        return Ok(grouped);
+    }
+    let client = ORM_CLIENT.get_or_init(connect_to_orm).await;
+    let mut query = alert_state_transitions::Entity::find()
+        .filter(alert_state_transitions::Column::AlertId.is_in(alert_ids.iter().cloned()))
+        .filter(alert_state_transitions::Column::At.gte(from))
+        .filter(alert_state_transitions::Column::At.lte(to));
+    if let Some(key) = group_key {
+        query = query.filter(alert_state_transitions::Column::GroupKey.eq(key));
+    }
+    let rows = query
+        .order_by_asc(alert_state_transitions::Column::At)
+        .limit(per_alert_limit.saturating_mul(alert_ids.len() as u64))
+        .all(client)
+        .await?;
+    for m in rows {
+        let Some(to_outcome) = RunOutcome::from_i32(m.to_outcome) else {
+            continue;
+        };
+        let transition = StateTransition {
+            alert_id: m.alert_id,
+            group_key: m.group_key,
+            from_outcome: m.from_outcome.and_then(RunOutcome::from_i32),
+            to_outcome,
+            from_level: m.from_level.and_then(AlertLevel::from_i32),
+            to_level: m.to_level.and_then(AlertLevel::from_i32),
+            at: m.at,
+            value: m.value,
+            group_labels: m.group_labels,
+        };
+        let lane = grouped.entry(transition.alert_id.clone()).or_default();
+        if lane.len() < per_alert_limit as usize {
+            lane.push(transition);
+        }
+    }
+    Ok(grouped)
+}
+
 /// Remove all state for an alert. Called when the alert itself is deleted —
 /// unlike `scheduled_jobs`, these rows are owned by the alert's lifecycle.
 pub async fn delete_by_alert(alert_id: &str) -> Result<(), errors::Error> {
@@ -700,6 +826,9 @@ pub async fn delete_by_alert_with<C: sea_orm::ConnectionTrait + TransactionTrait
     conn: &C,
     alert_id: &str,
 ) -> Result<(), errors::Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let txn = conn.begin().await?;
     alert_states::Entity::delete_many()
         .filter(alert_states::Column::AlertId.eq(alert_id))
@@ -716,6 +845,9 @@ pub async fn delete_by_alert_with<C: sea_orm::ConnectionTrait + TransactionTrait
 /// Retention for the append-only transition log. Governed by audit needs, set
 /// independently of the `triggers` stream retention.
 pub async fn delete_transitions_before(cutoff: i64) -> Result<(), errors::Error> {
+    // make sure only one client is writing to the database(only for sqlite)
+    let _lock = get_lock().await;
+
     let client = ORM_CLIENT.get_or_init(connect_to_orm).await;
     alert_state_transitions::Entity::delete_many()
         .filter(alert_state_transitions::Column::At.lt(cutoff))
@@ -966,6 +1098,7 @@ mod tests {
             name: Set("default".to_string()),
             description: Set(None),
             r#type: Set(0),
+            icon: Set(None),
         }
         .insert(conn)
         .await
