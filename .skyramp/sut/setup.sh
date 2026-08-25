@@ -5,11 +5,19 @@
 set -e
 
 # ---- Start OpenObserve ----
-# If the binary wasn't pre-staged by the GHA pre-steps, extract it from the Docker image.
-# openobserve does not publish pre-built binaries to GitHub releases; Docker Hub is the
-# canonical distribution channel.
+# The binary is pre-built from THIS PR's code by skyramp-testbot.yml and staged at
+# ./release-ci-binary/openobserve. If it is missing the build failed — fail loudly
+# rather than testing a mismatched version.
+#
+# A published Docker image is the WRONG code (a released version, not this PR), so
+# testing against it produces meaningless pass/fail. The fallback stays available for
+# LOCAL runs only, behind an explicit opt-in.
 if [ ! -f "./release-ci-binary/openobserve" ]; then
-  echo "Pre-built binary not found at ./release-ci-binary/openobserve; extracting from Docker image..."
+  if [ "${ALLOW_DOCKER_FALLBACK:-0}" != "1" ]; then
+    echo "::error::Pre-built binary not found at ./release-ci-binary/openobserve — the build step failed. Refusing to test a released Docker image against PR code. Set ALLOW_DOCKER_FALLBACK=1 for local runs." >&2
+    exit 1
+  fi
+  echo "::warning::ALLOW_DOCKER_FALLBACK=1 — extracting a RELEASED image; this does NOT test the PR code." >&2
   mkdir -p release-ci-binary
 
   DOCKER_TAG=$(curl -sf "https://hub.docker.com/v2/repositories/openobserve/openobserve/tags/?page_size=50&ordering=last_updated" 2>/dev/null | \
