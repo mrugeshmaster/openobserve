@@ -75,6 +75,16 @@ jobs:
   testbot:
     needs: gate
     if: needs.gate.outputs.allowed == 'true'
+    # The four credentials below belong to this environment, NOT to the repository.
+    # A `pull_request` run uses the workflow file from the PR itself, so anyone with
+    # push access can delete the gate above. They cannot delete the protection rules
+    # on an environment - those live in repo settings. Deleting this line instead
+    # only empties the secrets. For that to hold, an admin must (a) create the
+    # `skyramp-testbot` environment with required reviewers and (b) move
+    # SKYRAMP_LICENSE_FILE, SKYRAMP_TESTBOT_API_KEY, SKYRAMP_TESTBOT_APP_ID and
+    # SKYRAMP_TESTBOT_APP_PRIVATE_KEY out of repository secrets into it. Any copy
+    # left at repository level defeats the whole arrangement.
+    environment: skyramp-testbot
     runs-on: 'ubuntu-latest'
     permissions:
       contents: write
