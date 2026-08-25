@@ -20,25 +20,61 @@ env:
   ZO_SSRF_ALLOW_LOOPBACK: true
 
 jobs:
-  testbot:
-    # Gate BEFORE any secret-bearing step runs:
-    #  - skip closed-PR events (no build on close)
-    #  - pull_request: same-repo branch only (fork PRs get no secrets and would
-    #    fail the token step), and PR author on the allowlist (no 45-min build for
-    #    non-allowlisted authors)
-    #  - issue_comment: must @-mention the bot AND come from a repo role
-    #    (OWNER/MEMBER/COLLABORATOR). The action still re-checks write access.
+  # Gate BEFORE any secret-bearing step runs. The allowlists are secrets, and a
+  # job-level `if:` cannot read `secrets`, so the name check happens in a step
+  # here and publishes only a true/false. The checks that need no secret stay in
+  # this job's own `if:`, so a fork PR never starts a runner:
+  #  - pull_request: same-repo branch only (a fork PR gets no secrets and would
+  #    fail the token step anyway)
+  #  - issue_comment: must @-mention the bot
+  gate:
     if: >-
-      github.event.action != 'closed' &&
-      (
-        (github.event_name == 'pull_request' &&
-         github.event.pull_request.head.repo.full_name == github.repository &&
-         contains(fromJSON('["mrugeshmaster","Shrinath-O2"]'), github.event.pull_request.user.login))
-        ||
-        (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
-         contains(github.event.comment.body, '@skyramp-testbot') &&
-         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
-      )
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+      ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@skyramp-testbot'))
+    runs-on: 'ubuntu-latest'
+    permissions: {}
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+    steps:
+      - name: Check the author against the allowlist
+        id: check
+        env:
+          # Both secrets hold a NEWLINE-separated list. Newline is required, not a
+          # style choice: TESTBOT_ALLOWED_AUTHORS also feeds the action's
+          # `allowedAuthors` input, which splits on newlines only.
+          #   TESTBOT_ALLOWED_AUTHORS      -> GitHub logins
+          #   TESTBOT_ALLOWED_ASSOCIATIONS -> OWNER / MEMBER / COLLABORATOR
+          ALLOWED_AUTHORS: ${{ secrets.TESTBOT_ALLOWED_AUTHORS }}
+          ALLOWED_ASSOCIATIONS: ${{ secrets.TESTBOT_ALLOWED_ASSOCIATIONS }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          COMMENT_ASSOCIATION: ${{ github.event.comment.author_association }}
+        run: |
+          set -euo pipefail
+          # Print nothing derived from the lists. A masked value still leaks the
+          # entry count, and an empty secret must read as "deny", not "allow all".
+          normalize() { printf '%s' "${1:-}" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
+          in_list() { # $1 = value, $2 = normalized list
+            [ -n "$1" ] || return 1
+            grep -Fxq -- "$1" <<< "$2"
+          }
+          allowed=false
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if in_list "$PR_AUTHOR" "$(normalize "$ALLOWED_AUTHORS")"; then allowed=true; fi
+          elif [ "$EVENT_NAME" = "issue_comment" ]; then
+            if in_list "$COMMENT_ASSOCIATION" "$(normalize "$ALLOWED_ASSOCIATIONS")"; then allowed=true; fi
+          fi
+          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
+          if [ "$allowed" != "true" ]; then
+            echo "::notice::Not on the allowlist for this event - skipping Skyramp Testbot."
+          fi
+
+  testbot:
+    needs: gate
+    if: needs.gate.outputs.allowed == 'true'
     runs-on: 'ubuntu-latest'
     permissions:
       contents: write
@@ -59,15 +95,18 @@ jobs:
           token: ${{ steps.skyramp-testbot-app-token.outputs.token }}
           persist-credentials: false
 
-      - name: Check for self-triggered run
-        id: self-trigger
+      - name: Decide whether to build the SUT
+        id: build-gate
         env:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           ACTION: ${{ github.event.action }}
         run: |
           skip=false
-          if [ "$PR_AUTHOR" = "skyramp-testbot[bot]" ]; then
+          if [ "$ACTION" = "closed" ]; then
+            skip=true
+            echo "::notice::PR closed - skipping the SUT build. The Testbot step still runs so it can clean up."
+          elif [ "$PR_AUTHOR" = "skyramp-testbot[bot]" ]; then
             skip=true
             echo "::notice::PR authored by skyramp-testbot[bot] — skipping the SUT build."
           elif [ -n "$HEAD_SHA" ] && [ "$ACTION" = "synchronize" ]; then
@@ -89,7 +128,7 @@ jobs:
       # takes ~30-45 min, which does not fit the setup step's time budget.
 
       - name: Remove unused tools (free disk space)
-        if: steps.self-trigger.outputs.skip != 'true'
+        if: steps.build-gate.outputs.skip != 'true'
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
@@ -97,35 +136,35 @@ jobs:
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
       - name: Setup Rust Toolchain
-        if: steps.self-trigger.outputs.skip != 'true'
+        if: steps.build-gate.outputs.skip != 'true'
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master (nightly toolchain)
         with:
           toolchain: nightly-2026-05-20
           targets: x86_64-unknown-linux-gnu
 
       - name: Setup Rust Cache
-        if: steps.self-trigger.outputs.skip != 'true'
+        if: steps.build-gate.outputs.skip != 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
           shared-key: skyramp-testbot-release-ci
 
       - name: Install Protoc
-        if: steps.self-trigger.outputs.skip != 'true'
+        if: steps.build-gate.outputs.skip != 'true'
         run: bash ./.github/protoc.sh
 
       - name: Setup Node.js
-        if: steps.self-trigger.outputs.skip != 'true'
+        if: steps.build-gate.outputs.skip != 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
 
       - name: Install UI test-support dependencies
-        if: steps.self-trigger.outputs.skip != 'true'
+        if: steps.build-gate.outputs.skip != 'true'
         run: cd tests/ui-testing && (npm ci || npm install)
 
       - name: Build binary and frontend
-        if: steps.self-trigger.outputs.skip != 'true'
+        if: steps.build-gate.outputs.skip != 'true'
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
           GIT_HASH_OVERRIDE: ${{ github.sha }}
@@ -139,7 +178,7 @@ jobs:
           cargo build --profile release-ci --target x86_64-unknown-linux-gnu
 
       - name: Stage binary for SUT startup
-        if: steps.self-trigger.outputs.skip != 'true'
+        if: steps.build-gate.outputs.skip != 'true'
         run: |
           mkdir -p release-ci-binary
           cp target/x86_64-unknown-linux-gnu/release-ci/openobserve release-ci-binary/openobserve
@@ -155,9 +194,7 @@ jobs:
           githubToken: ${{ steps.skyramp-testbot-app-token.outputs.token }}
           githubAppId: ${{ secrets.SKYRAMP_TESTBOT_APP_ID }}
           githubAppPrivateKey: ${{ secrets.SKYRAMP_TESTBOT_APP_PRIVATE_KEY }}
-          allowedAuthors: |
-            mrugeshmaster
-            Shrinath-O2
+          allowedAuthors: ${{ secrets.TESTBOT_ALLOWED_AUTHORS }}
           sutSetupMode: 'none'
           sutSourceWorkflowFile: '.github/workflows/playwright.yml'
           targetSetupCommand: 'bash .skyramp/sut/setup.sh'
